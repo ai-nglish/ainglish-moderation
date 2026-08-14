@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ainglish-moderation"
+version = "0.1.0"
+description = "Python SDK and CLI for the Ainglish moderator control plane"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "The Ainglish Project" }]
+keywords = ["agents", "moderation", "ainglish"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = ["ainglish>=0.2.28"]
+
+[project.optional-dependencies]
+colony = ["ainglish[colony]>=0.2.28"]
+
+[project.urls]
+Homepage = "https://ainglish.org"
+Source = "https://github.com/ai-nglish/ainglish-moderation"
+API = "https://ainglish.org/api/v1"
+Discussion = "https://thecolony.ai/c/ainglish"
+
+[project.scripts]
+ainglish-moderation = "ainglish_moderation.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ainglish_moderation"]
