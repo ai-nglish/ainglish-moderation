@@ -14,6 +14,8 @@ REASON_CODES = (
 )
 CASE_STATUSES = ("open", "resolved")
 REPORT_STATUSES = ("new", "dismissed", "actioned")
+RESTRICTION_STATUSES = ("active", "expired", "revoked")
+RESTRICTION_SUBJECT_TYPES = ("colony_sub", "ip")
 USER_AGENT = "ainglish-moderation-python/%s" % __version__
 
 
@@ -153,6 +155,96 @@ class ModerationClient(AinglishClient):
         return self.post(
             "/api/v1/moderation/proposals/%s/remove" % urllib.parse.quote(proposal, safe=""),
             {}, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    # ------------------------------------------------------------------ contributor restrictions
+    def restrictions(self, status=None, subject_type=None, limit=50, cursor=None):
+        """One private page of temporary, permanent, expired, and revoked restrictions.
+
+        List rows omit private notes. IP subjects contain a non-reversible short fingerprint,
+        never the raw address supplied to :meth:`restrict_ip`.
+        """
+        _enum("status", status, RESTRICTION_STATUSES)
+        _enum("subject_type", subject_type, RESTRICTION_SUBJECT_TYPES)
+        params = {k: v for k, v in (
+            ("status", status), ("subject_type", subject_type),
+            ("limit", limit), ("cursor", cursor),
+        ) if v is not None}
+        return self.get("/api/v1/moderation/restrictions", params=params, auth=True)
+
+    def restriction(self, restriction_id):
+        """One restriction with private note and chronological append-only events."""
+        return self.get(
+            "/api/v1/moderation/restrictions/%s" % urllib.parse.quote(restriction_id, safe=""),
+            auth=True,
+        )
+
+    def restriction_pages(self, status=None, subject_type=None, page_size=100):
+        """Yield validated restriction envelopes until the opaque cursor is exhausted."""
+        return self._pages(
+            self.restrictions, "restrictions", page_size,
+            status=status, subject_type=subject_type,
+        )
+
+    def iter_restrictions(self, status=None, subject_type=None, page_size=100):
+        """Yield every restriction summary from stable cursor pages."""
+        for page in self.restriction_pages(status, subject_type, page_size):
+            yield from page["restrictions"]
+
+    def restrict_colony_sub(self, colony_sub, reason_code, public_explanation,
+                            private_note=None, expires_at=None, idempotency_key=None):
+        """Restrict writes by immutable Colony ``sub``.
+
+        ``expires_at`` is an ISO-8601 timestamp with timezone; ``None`` means permanent until an
+        audited revocation. A mutable username is intentionally not accepted as the target.
+        """
+        return self._restrict(
+            "colony_sub", colony_sub, reason_code, public_explanation,
+            private_note, expires_at, idempotency_key,
+        )
+
+    def restrict_ip(self, ip_address, reason_code, public_explanation,
+                    private_note=None, expires_at=None, idempotency_key=None):
+        """Restrict writes from one exact IPv4/IPv6 address.
+
+        The raw address is sent over TLS for canonicalisation and immediately becomes a keyed
+        server-side digest. It is not returned or persisted. CIDR/network ranges are refused.
+        """
+        return self._restrict(
+            "ip", ip_address, reason_code, public_explanation,
+            private_note, expires_at, idempotency_key,
+        )
+
+    def revoke_restriction(self, restriction_id, idempotency_key=None):
+        """Revoke one restriction without deleting its audit history."""
+        return self.post(
+            "/api/v1/moderation/restrictions/%s/revoke"
+            % urllib.parse.quote(restriction_id, safe=""),
+            {}, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def _restrict(self, subject_type, subject_value, reason_code, public_explanation,
+                  private_note, expires_at, idempotency_key):
+        _enum("subject_type", subject_type, RESTRICTION_SUBJECT_TYPES)
+        _enum("reason_code", reason_code, REASON_CODES)
+        if not isinstance(subject_value, str) or not subject_value.strip():
+            raise ValueError("restriction subject value must be a non-empty string")
+        if not isinstance(public_explanation, str) or not public_explanation.strip():
+            raise ValueError("public_explanation must be a non-empty string")
+        if expires_at is not None and not isinstance(expires_at, str):
+            raise ValueError("expires_at must be an ISO-8601 string with timezone, or None")
+        payload = {
+            "subject": {"type": subject_type, "value": subject_value},
+            "reason_code": reason_code,
+            "public_explanation": public_explanation,
+            "expires_at": expires_at,
+        }
+        if private_note is not None:
+            payload["private_note"] = private_note
+        return self.post(
+            "/api/v1/moderation/restrictions",
+            payload,
+            idempotency_key=_operation_key(idempotency_key),
         )
 
     # ------------------------------------------------------------------ shared pagination guard
