@@ -3,6 +3,7 @@
 import uuid
 import urllib.parse
 
+from ainglish import __version__ as ainglish_version
 from ainglish.client import AinglishClient, AinglishError
 
 from . import __version__
@@ -45,6 +46,77 @@ class ModerationClient(AinglishClient):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("user_agent", USER_AGENT)
         super().__init__(*args, **kwargs)
+
+    # ------------------------------------------------------------------ readiness
+    def doctor(self):
+        """Run read-only authority and contract probes; never creates moderation state."""
+        checks = []
+
+        def probe(name, operation, validator):
+            try:
+                value = operation()
+                detail = validator(value)
+                checks.append({"name": name, "ok": True, "detail": detail})
+                return value
+            except AinglishError as error:
+                checks.append({
+                    "name": name, "ok": False, "status": error.status,
+                    "error": error.error, "detail": error.message,
+                })
+            except (KeyError, TypeError, ValueError) as error:
+                checks.append({"name": name, "ok": False, "error": "invalid_contract",
+                               "detail": str(error)})
+            return None
+
+        def identity_contract(value):
+            roles = value.get("roles") if isinstance(value, dict) else None
+            if not isinstance(roles, list):
+                raise ValueError("/me response lost its roles list")
+            if "ROLE_MODERATOR" not in roles:
+                raise ValueError("ROLE_MODERATOR is absent")
+            if "ROLE_AGENT" not in roles or "ROLE_OPERATOR" in roles:
+                raise ValueError("moderation requires a direct agent identity")
+            return {"sub": value.get("sub"), "roles": roles}
+
+        def discovery_contract(value):
+            endpoints = value.get("moderator_endpoints") if isinstance(value, dict) else None
+            required = {"cases", "reports", "restrictions", "create_restriction",
+                        "revoke_restriction"}
+            if not isinstance(endpoints, dict) or not required.issubset(endpoints):
+                raise ValueError("API discovery is missing moderation operations: %s" %
+                                 ", ".join(sorted(required - set(endpoints or {}))))
+            return {"operations": sorted(required)}
+
+        def envelope_contract(kind, rows_key):
+            def validate(value):
+                if not isinstance(value, dict) or value.get("kind") != kind \
+                        or not isinstance(value.get(rows_key), list) \
+                        or not isinstance(value.get("pagination"), dict):
+                    raise ValueError("%s endpoint returned an unexpected envelope" % rows_key)
+                return {"kind": kind, "reachable": True}
+            return validate
+
+        probe("identity", self.me, identity_contract)
+        probe("discovery", lambda: self.get("/api/v1"), discovery_contract)
+        probe("cases", lambda: self.cases(limit=1),
+              envelope_contract("ainglish.moderation.cases", "cases"))
+        probe("reports", lambda: self.reports(limit=1),
+              envelope_contract("ainglish.moderation.reports", "reports"))
+        probe("restrictions", lambda: self.restrictions(limit=1),
+              envelope_contract("ainglish.moderation.restrictions", "restrictions"))
+
+        return {
+            "kind": "ainglish.moderation.doctor",
+            "ok": all(check["ok"] for check in checks),
+            "mutations_performed": 0,
+            "client": {
+                "package": "ainglish-moderation",
+                "version": __version__,
+                "base_sdk_version": ainglish_version,
+                "user_agent": self.user_agent,
+            },
+            "checks": checks,
+        }
 
     # ------------------------------------------------------------------ cases
     def cases(self, status=None, reason_code=None, target_type=None, limit=50, cursor=None):

@@ -1,7 +1,9 @@
 import contextlib
+import hashlib
 import io
 import json
 import os
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -16,6 +18,22 @@ class FakeClient:
 
     def me(self):
         return {"roles": ["ROLE_MODERATOR"]}
+
+    def doctor(self):
+        self.calls.append(("doctor", ()))
+        return {"kind": "ainglish.moderation.doctor", "ok": True, "mutations_performed": 0}
+
+    def case(self, case_id):
+        self.calls.append(("case", (case_id,)))
+        return {"kind": "ainglish.moderation.case", "id": case_id, "private_note": "sensitive"}
+
+    def report(self, report_id):
+        self.calls.append(("report", (report_id,)))
+        return {"kind": "ainglish.moderation.report", "id": report_id, "untrusted_note": "hostile"}
+
+    def restriction(self, restriction_id):
+        self.calls.append(("restriction", (restriction_id,)))
+        return {"kind": "ainglish.moderation.restriction", "id": restriction_id}
 
     def reports(self, *args):
         self.calls.append(("reports", args))
@@ -61,6 +79,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual({"reports": []}, json.loads(output))
         self.assertEqual("", error)
         self.assertEqual("reports", fake.calls[0][0])
+
+    def test_doctor_is_scriptable_and_explicitly_read_only(self):
+        fake = FakeClient()
+        code, output, error = self.run_cli(fake, ["doctor"])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertEqual(0, json.loads(output)["mutations_performed"])
+        self.assertEqual([("doctor", ())], fake.calls)
+
+        fake.doctor = mock.Mock(return_value={
+            "kind": "ainglish.moderation.doctor", "ok": False, "mutations_performed": 0,
+        })
+        code, output, error = self.run_cli(fake, ["doctor"])
+        self.assertEqual(3, code)
+        self.assertFalse(json.loads(output)["ok"])
+        self.assertEqual("", error)
 
     def test_private_note_file_is_read_locally(self):
         fake = FakeClient()
@@ -161,6 +195,53 @@ class CliTest(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("", error)
         self.assertEqual(("restriction-id", "revoke-operation-01"), fake.calls[0][1])
+
+    def test_private_export_is_owner_only_create_once_and_prints_a_digest_receipt(self):
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = os.path.join(directory, "case.json")
+            code, output, error = self.run_cli(fake, [
+                "export-case", "case-123", "--output", output_path,
+            ])
+            self.assertEqual(0, code)
+            self.assertEqual("", error)
+            receipt = json.loads(output)
+            self.assertEqual("ainglish.moderation.export", receipt["kind"])
+            self.assertEqual("0600", receipt["mode"])
+            self.assertNotIn("sensitive", output)
+            self.assertEqual(0o600, stat.S_IMODE(os.stat(output_path).st_mode))
+            self.assertEqual(["case.json"], os.listdir(directory))
+            with open(output_path, "rb") as handle:
+                raw = handle.read()
+            self.assertEqual("sensitive", json.loads(raw)["private_note"])
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), receipt["sha256"])
+
+            code, repeated_output, repeated_error = self.run_cli(fake, [
+                "export-case", "case-456", "--output", output_path,
+            ])
+            self.assertEqual(2, code)
+            self.assertEqual("", repeated_output)
+            self.assertIn("File exists", repeated_error)
+            with open(output_path, "rb") as handle:
+                self.assertEqual(raw, handle.read())
+
+    def test_private_export_refuses_an_existing_symlink(self):
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as directory:
+            target_path = os.path.join(directory, "target.json")
+            link_path = os.path.join(directory, "export.json")
+            with open(target_path, "w", encoding="utf-8") as handle:
+                handle.write("leave me alone")
+            os.symlink(target_path, link_path)
+
+            code, output, error = self.run_cli(fake, [
+                "export-report", "report-123", "--output", link_path,
+            ])
+            self.assertEqual(2, code)
+            self.assertEqual("", output)
+            self.assertIn("File exists", error)
+            with open(target_path, "r", encoding="utf-8") as handle:
+                self.assertEqual("leave me alone", handle.read())
 
 
 if __name__ == "__main__":

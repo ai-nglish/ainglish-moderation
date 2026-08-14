@@ -1,9 +1,11 @@
 """Small, scriptable CLI over :class:`ainglish_moderation.ModerationClient`."""
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+import tempfile
 
 from ainglish.client import AinglishError
 
@@ -30,6 +32,39 @@ def _client(args):
     )
 
 
+def _export_json(value, output_path):
+    """Create one owner-only evidence export without following/replacing a destination file."""
+    payload = (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+    absolute_path = os.path.abspath(output_path)
+    directory = os.path.dirname(absolute_path)
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=".%s." % os.path.basename(absolute_path), suffix=".tmp", dir=directory,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # A same-directory hard link makes the completed bytes appear atomically and refuses any
+        # existing file or symlink. The temporary name is always package-created mode 0600.
+        os.link(temporary_path, absolute_path, follow_symlinks=False)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+    return {
+        "kind": "ainglish.moderation.export",
+        "output": absolute_path,
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "mode": "0600",
+    }
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         prog="ainglish-moderation",
@@ -42,6 +77,7 @@ def _build_parser():
     commands = parser.add_subparsers(dest="command", required=True)
 
     commands.add_parser("whoami", help="Show the identity and roles the server sees.")
+    commands.add_parser("doctor", help="Run read-only authority and endpoint readiness checks.")
 
     cases = commands.add_parser("cases", help="List moderation cases.")
     cases.add_argument("--status", choices=CASE_STATUSES)
@@ -104,6 +140,15 @@ def _build_parser():
     revoke = commands.add_parser("revoke-restriction", help="Revoke a restriction but retain its audit history.")
     revoke.add_argument("id")
     revoke.add_argument("--idempotency-key")
+
+    for name, help_text in (
+        ("export-case", "Export one private case envelope to a new mode-600 JSON file."),
+        ("export-report", "Export one private report envelope to a new mode-600 JSON file."),
+        ("export-restriction", "Export one private restriction envelope to a new mode-600 JSON file."),
+    ):
+        export = commands.add_parser(name, help=help_text)
+        export.add_argument("id")
+        export.add_argument("--output", required=True)
     return parser
 
 
@@ -121,6 +166,8 @@ def _restriction_terms(command):
 def _run(client, args):
     if args.command == "whoami":
         return client.me()
+    if args.command == "doctor":
+        return client.doctor()
     if args.command == "cases":
         return client.cases(args.status, args.reason_code, args.target_type, args.limit, args.cursor)
     if args.command == "case":
@@ -159,6 +206,12 @@ def _run(client, args):
             note, expires_at, args.idempotency_key)
     if args.command == "revoke-restriction":
         return client.revoke_restriction(args.id, args.idempotency_key)
+    if args.command == "export-case":
+        return _export_json(client.case(args.id), args.output)
+    if args.command == "export-report":
+        return _export_json(client.report(args.id), args.output)
+    if args.command == "export-restriction":
+        return _export_json(client.restriction(args.id), args.output)
     raise AssertionError("unhandled command")
 
 
@@ -168,6 +221,8 @@ def main(argv=None):
     try:
         result = _run(_client(args), args)
         print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+        if args.command == "doctor" and not result.get("ok"):
+            return 3
         return 0
     except AinglishError as error:
         payload = {"error": error.error, "status": error.status, "message": error.message}

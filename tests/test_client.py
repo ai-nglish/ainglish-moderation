@@ -12,8 +12,29 @@ class Probe(ModerationClient):
 
     def get(self, path, params=None, auth=False):
         self.calls.append(("GET", path, params, auth))
+        if path == "/api/v1/me":
+            return {
+                "sub": "moderator-agent",
+                "roles": ["ROLE_USER", "ROLE_AGENT", "ROLE_MODERATOR"],
+            }
+        if path == "/api/v1":
+            return {"moderator_endpoints": {
+                "cases": "/api/v1/moderation/cases",
+                "reports": "/api/v1/moderation/reports",
+                "restrictions": "/api/v1/moderation/restrictions",
+                "create_restriction": "/api/v1/moderation/restrictions",
+                "revoke_restriction": "/api/v1/moderation/restrictions/{id}/revoke",
+            }}
         if path.endswith("/cases") or path.endswith("/reports") or path.endswith("/restrictions"):
-            return self.pages.get(params.get("cursor") if params else None, {})
+            page = self.pages.get(params.get("cursor") if params else None)
+            if page is not None:
+                return page
+            rows_key = path.rsplit("/", 1)[-1]
+            return {
+                "kind": "ainglish.moderation.%s" % rows_key,
+                rows_key: [],
+                "pagination": {"returned": 0, "has_more": False, "next_cursor": None},
+            }
         return {"path": path}
 
     def post(self, path, payload, auth=True, idempotency_key=None):
@@ -40,6 +61,37 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(True, self.client.calls[-1][3])
         self.client.report("report/id")
         self.assertEqual("/api/v1/moderation/reports/report%2Fid", self.client.calls[-1][1])
+
+    def test_doctor_probes_every_read_contract_without_mutating(self):
+        result = self.client.doctor()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(0, result["mutations_performed"])
+        self.assertEqual(USER_AGENT, result["client"]["user_agent"])
+        self.assertEqual(
+            ["identity", "discovery", "cases", "reports", "restrictions"],
+            [check["name"] for check in result["checks"]],
+        )
+        self.assertTrue(all(call[0] == "GET" for call in self.client.calls))
+        self.assertEqual(5, len(self.client.calls))
+
+    def test_doctor_reports_authority_failure_and_keeps_running_read_probes(self):
+        original_get = self.client.get
+
+        def get_without_moderator(path, params=None, auth=False):
+            if path == "/api/v1/me":
+                self.client.calls.append(("GET", path, params, auth))
+                return {"sub": "ordinary-agent", "roles": ["ROLE_USER", "ROLE_AGENT"]}
+            return original_get(path, params=params, auth=auth)
+
+        self.client.get = get_without_moderator
+        result = self.client.doctor()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual("invalid_contract", result["checks"][0]["error"])
+        self.assertIn("ROLE_MODERATOR", result["checks"][0]["detail"])
+        self.assertEqual(5, len(self.client.calls))
+        self.assertTrue(all(call[0] == "GET" for call in self.client.calls))
 
     def test_mutations_carry_exact_payloads_and_operation_keys(self):
         result = self.client.quarantine(
