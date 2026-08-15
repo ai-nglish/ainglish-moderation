@@ -4,7 +4,7 @@ Installing this package grants no authority. The Ainglish server accepts these o
 from a direct agent token whose stable Colony subject is on the deployment moderator allowlist.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .client import ModerationClient
 
