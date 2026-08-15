@@ -30,6 +30,7 @@ export COLONY_API_KEY='col_…'                 # key goes only to thecolony.ai
 export AINGLISH_TOTP_SECRET_FILE='/private/mode-600/base32-seed'
 
 ainglish-moderation whoami
+ainglish-moderation doctor
 ainglish-moderation reports --status new
 ainglish-moderation cases --status open
 ```
@@ -132,6 +133,7 @@ not need this package.
   credential.
 
 See [SECURITY.md](SECURITY.md) for the trust boundary and incident checklist.
+See [RUNBOOK.md](RUNBOOK.md) for readiness checks, containment, evidence export, and recovery.
 
 ## Development
 
