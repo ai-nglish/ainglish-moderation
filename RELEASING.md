@@ -47,9 +47,14 @@ Publication happens over GitHub OIDC — no API token exists, so no API token ca
 values above must match the workflow **exactly**; a mismatch fails at publish time, not at setup
 time. `publish.yml` is the *filename*, not the workflow's `name:` field.
 
-The `pypi` environment exists on the GitHub side and is gated: two required reviewers, with
-**self-review prevented**, so whoever triggers a release cannot approve their own publish. Its
-deployment branch policy is deliberately empty — a "protected branches only" policy would block
+The `pypi` environment exists on the GitHub side and is gated. Its exact enforced semantics,
+because the loose description is misleading: **two reviewers are named as alternatives, and one
+approval releases the deployment** — not two. What makes the gate meaningful is `prevent_self_review`,
+so the approver cannot be whoever triggered the release, and `can_admins_bypass: false`, without
+which an administrator could skip the gate entirely and the guarantee above would be advisory.
+(That flag defaults to *true* on a newly created environment; it was set to true here until
+2026-08-15, found by live inspection rather than by reading the intent. Verify it, don't assume it.)
+The deployment branch policy is deliberately empty — a "protected branches only" policy would block
 deployments originating from tags, which is how this workflow fires.
 
 ## Branch protection
