@@ -47,13 +47,10 @@ Publication happens over GitHub OIDC — no API token exists, so no API token ca
 values above must match the workflow **exactly**; a mismatch fails at publish time, not at setup
 time. `publish.yml` is the *filename*, not the workflow's `name:` field.
 
-Two preconditions this repo does not yet satisfy, both of which the first release needs:
-
-- **The `pypi` environment must exist** under Settings → Environments. That is also the only place
-  a **required-reviewer gate** can be attached, and it should be: publishing is the one action here
-  that cannot be undone, and a claimed name cannot be released.
-- **`main` is unprotected today.** Until protection exists, every rule below that says "another
-  party reviews" is honour-based rather than enforced. See the next section.
+The `pypi` environment exists on the GitHub side and is gated: two required reviewers, with
+**self-review prevented**, so whoever triggers a release cannot approve their own publish. Its
+deployment branch policy is deliberately empty — a "protected branches only" policy would block
+deployments originating from tags, which is how this workflow fires.
 
 ## Branch protection
 
@@ -62,19 +59,34 @@ review** and green required checks; force pushes and deletions are blocked; **no
 standing admin**, so the rule binds everyone — including the release commit, which therefore also
 arrives by PR, and **the releaser cannot approve their own PR**.
 
-That protection is not configured here yet. The rule stands as project law regardless, because it
-is the rule that makes a release a *second* party's judgement rather than a self-attestation — the
-same no-self-attestation principle this package's own subject matter is built on. A moderation tool
-whose releases are self-approved undercuts the property it exists to enforce.
+**`main` here is protected, and the enforced contract is:** pull request required with one
+approving review; stale approvals dismissed on new pushes; **approval of the most recent push
+required**, which is what actually stops a releaser approving their own release rather than leaving
+it to good manners; conversation resolution required; force pushes and branch deletion blocked; and
+**administrators included**, so no collaborator holds a standing bypass. Verified by attempting a
+direct push and a force push from a full-admin account — both refused (`GH006`), `main` unmoved.
+
+Required status checks are deliberately **not** configured yet: a required check that has never run
+blocks every merge, including the PRs already open. They land once CI exists and its jobs have run
+once — at which point those job names become part of the protection contract, so renaming a job
+silently stops satisfying the gate.
+
+The rule this enforces is the reason it exists: a release should be a *second* party's judgement
+rather than a self-attestation — the same no-self-attestation principle this package's own subject
+matter is built on. A moderation tool whose releases are self-approved undercuts the property it
+exists to enforce.
 
 ## The release checklist
 
 Run on the default branch, clean tree (`git status --porcelain` empty), in this order. Stop at the
 first failure — nothing before the tag push has spent anything.
 
-1. **Release commit, as a PR**: rename `## Unreleased` to `## X.Y.Z — YYYY-MM-DD`; set both stamps
-   (`pyproject.toml`, `src/ainglish_moderation/__init__.py`). Nothing else in it. Open the PR and
-   get one approving review from someone who is not the releaser.
+1. **Release commit, as a PR**: rename `## Unreleased` to `## X.Y.Z — YYYY-MM-DD`, and **ensure
+   both stamps equal `X.Y.Z`** (`pyproject.toml`, `src/ainglish_moderation/__init__.py`), editing
+   them when they differ. Nothing else in it. Open the PR and get one approving review from someone
+   who is not the releaser. Phrasing it as *ensure* rather than *set* makes the first release
+   mechanically unambiguous: the stamps already read `0.1.0`, so that commit moves the changelog
+   heading alone.
 2. **`make test`** — the full suite, green.
 3. **`make build`** — and confirm the built artifacts' metadata version equals the intended
    `X.Y.Z`. A wheel whose metadata disagrees with the tag is the failure the publish workflow's
@@ -104,9 +116,17 @@ take the next number, and leave a superseded warning on the burned release's not
 
 Ordinary release hygiene plus one domain-specific rule, because of what this client handles:
 
-- **No raw IP addresses, ever** — in fixtures, test data, recorded cassettes, example output, or
-  documentation. The server stores only keyed digests by construction; an artifact shipped from
-  here is exactly where that property would quietly get undone.
+- **No real IP addresses.** No observed, production, or otherwise operational address may enter a
+  tracked or published artifact — fixtures, test data, recorded cassettes, example output, or docs.
+  **IANA-reserved documentation ranges are permitted in synthetic fixtures and tests**
+  (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`): they identify no host and
+  carry no personal data, and a valid literal is *required* to prove the property that matters —
+  that the client accepts an operator's address and never prints it. A rule broad enough to ban
+  those literals would ban the test that proves the guarantee, which is the opposite of the intent.
+- **The server and export invariant stays absolute**, and is a different claim from the fixture
+  rule above: a raw address supplied to a restriction is transformed on arrival, never persisted,
+  never returned, and only a keyed fingerprint is ever serialised. Nothing shipped from this
+  package may weaken that — an operational export is exactly where it would quietly get undone.
 - **No real moderation case content, private notes, or reporter prose** in tests or docs. Those are
   the fields the server keeps moderator-only; a published package is not moderator-only.
 - **No credentials** — this package authenticates with a caller-supplied token and holds none of
