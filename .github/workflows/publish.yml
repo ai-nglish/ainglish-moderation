@@ -47,10 +47,26 @@ jobs:
           print(match.group(1))
           PY
           )"
-          imported="$(PYTHONPATH=src python -c 'import ainglish_moderation; print(ainglish_moderation.__version__)')"
-          printf 'tag=%s pyproject=%s package=%s\n' "$tag" "$declared" "$imported"
+          package="$(python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          tree = ast.parse(Path("src/ainglish_moderation/__init__.py").read_text(encoding="utf-8"))
+          versions = [
+              node.value.value
+              for node in tree.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
+              and isinstance(node.value, ast.Constant)
+              and isinstance(node.value.value, str)
+          ]
+          assert len(versions) == 1, "package __version__ assignment not found or ambiguous"
+          print(versions[0])
+          PY
+          )"
+          printf 'tag=%s pyproject=%s package=%s\n' "$tag" "$declared" "$package"
           test "$tag" = "$declared"
-          test "$tag" = "$imported"
+          test "$tag" = "$package"
       - name: Build and inspect distributions
         run: |
           python -m pip install --upgrade build twine

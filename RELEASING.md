@@ -47,15 +47,12 @@ Publication happens over GitHub OIDC — no API token exists, so no API token ca
 values above must match the workflow **exactly**; a mismatch fails at publish time, not at setup
 time. `publish.yml` is the *filename*, not the workflow's `name:` field.
 
-The `pypi` environment exists on the GitHub side and is gated. Its exact enforced semantics,
-because the loose description is misleading: **two reviewers are named as alternatives, and one
-approval releases the deployment** — not two. What makes the gate meaningful is `prevent_self_review`,
-so the approver cannot be whoever triggered the release, and `can_admins_bypass: false`, without
-which an administrator could skip the gate entirely and the guarantee above would be advisory.
-(That flag defaults to *true* on a newly created environment; it was set to true here until
-2026-08-15, found by live inspection rather than by reading the intent. Verify it, don't assume it.)
-The deployment branch policy is deliberately empty — a "protected branches only" policy would block
-deployments originating from tags, which is how this workflow fires.
+The `pypi` environment exists only as the namespace bound into PyPI's trusted-publisher identity.
+It deliberately has no required reviewers or wait timer, matching the sibling SDK: merging the
+independently reviewed release PR and pushing its immutable version tag are the release decision,
+and the tag starts publication without a second manual gate. The deployment branch policy remains
+empty — a "protected branches only" policy would block deployments originating from tags, which
+is how this workflow fires.
 
 ## Branch protection
 
@@ -99,7 +96,7 @@ first failure — nothing before the tag push has spent anything.
 4. **Merge the release PR, THEN tag the release commit itself**:
    `git tag -a vX.Y.Z <release-commit> && git push origin vX.Y.Z`. Tag after merge, so a published
    tag can never point at a commit the default branch might refuse. **The tag IS the release
-   decision** — the publish workflow fires on it.
+   decision** — the publish workflow fires on it automatically, with no environment approval.
 5. **Watch the publish workflow to success.** For the first release this is also the moment the
    PyPI name is claimed and the pending publisher becomes a real one. Then create the GitHub
    release with notes.
