@@ -2,6 +2,7 @@
 
 import uuid
 import urllib.parse
+from datetime import datetime, timezone
 
 from ainglish import __version__ as ainglish_version
 from ainglish.client import AinglishClient, AinglishError
@@ -181,6 +182,54 @@ class ModerationClient(AinglishClient):
         """Yield every report summary from stable cursor pages."""
         for page in self.report_pages(status, reason_code, proposal, reporter_sub, page_size):
             yield from page["reports"]
+
+    def inbox_status(self, page_size=100, now=None):
+        """Return a content-free health receipt for unattended inbox monitoring.
+
+        This traverses only new report summaries and deliberately returns neither row data nor
+        reporter-supplied prose. It performs no mutation. ``now`` exists for deterministic tests;
+        normal callers should leave it unset.
+        """
+        checked_at = datetime.now(timezone.utc) if now is None else now
+        if not isinstance(checked_at, datetime) or checked_at.tzinfo is None \
+                or checked_at.utcoffset() is None:
+            raise ValueError("now must be a timezone-aware datetime")
+        checked_at = checked_at.astimezone(timezone.utc)
+
+        report_count = 0
+        oldest = None
+        for report in self.iter_reports(status="new", page_size=page_size):
+            created_at = report.get("created_at") if isinstance(report, dict) else None
+            if not isinstance(created_at, str):
+                raise AinglishError(502, {
+                    "error": "invalid_contract",
+                    "message": "new report summary lost its created_at timestamp",
+                })
+            try:
+                parsed = datetime.fromisoformat(
+                    created_at[:-1] + "+00:00" if created_at.endswith("Z") else created_at
+                )
+            except ValueError:
+                parsed = None
+            if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise AinglishError(502, {
+                    "error": "invalid_contract",
+                    "message": "new report summary returned an invalid created_at timestamp",
+                })
+            parsed = parsed.astimezone(timezone.utc)
+            oldest = parsed if oldest is None or parsed < oldest else oldest
+            report_count += 1
+
+        age_seconds = None if oldest is None else max(0, int((checked_at - oldest).total_seconds()))
+        return {
+            "kind": "ainglish.moderation.inbox_status",
+            "attention_required": report_count > 0,
+            "new_reports": report_count,
+            "oldest_new_report_at": oldest.isoformat().replace("+00:00", "Z") if oldest else None,
+            "oldest_new_report_age_seconds": age_seconds,
+            "mutations_performed": 0,
+            "untrusted_content_included": False,
+        }
 
     def dismiss_report(self, report_id, resolution_note=None, idempotency_key=None):
         """Resolve a report without changing publication. Exact operation retries are safe."""

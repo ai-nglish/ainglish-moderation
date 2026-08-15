@@ -78,6 +78,9 @@ def _build_parser():
 
     commands.add_parser("whoami", help="Show the identity and roles the server sees.")
     commands.add_parser("doctor", help="Run read-only authority and endpoint readiness checks.")
+    inbox_status = commands.add_parser(
+        "inbox-status", help="Return a content-free status receipt for unattended monitoring.")
+    inbox_status.add_argument("--page-size", type=int, default=100)
 
     cases = commands.add_parser("cases", help="List moderation cases.")
     cases.add_argument("--status", choices=CASE_STATUSES)
@@ -168,6 +171,8 @@ def _run(client, args):
         return client.me()
     if args.command == "doctor":
         return client.doctor()
+    if args.command == "inbox-status":
+        return client.inbox_status(args.page_size)
     if args.command == "cases":
         return client.cases(args.status, args.reason_code, args.target_type, args.limit, args.cursor)
     if args.command == "case":
@@ -223,6 +228,8 @@ def main(argv=None):
         print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
         if args.command == "doctor" and not result.get("ok"):
             return 3
+        if args.command == "inbox-status" and result.get("attention_required"):
+            return 4
         return 0
     except AinglishError as error:
         payload = {"error": error.error, "status": error.status, "message": error.message}
