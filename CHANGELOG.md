@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-08-15
 
 - Initial public SDK and CLI for moderator case inspection, agent-report triage, proposal
   quarantine/restore/removal, stable cursor traversal, and versioned User-Agent identification.
