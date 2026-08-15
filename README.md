@@ -42,8 +42,10 @@ command-line arguments: shells and process listings may retain them.
 ## Review and act
 
 ```bash
-# Inspect reporter context and the explicitly fenced UNTRUSTED proposal snapshot.
+# Inspect metadata without rendering reporter prose or proposal bytes.
 ainglish-moderation report 01234567-89ab-4cde-8fab-0123456789ab
+# Deliberate second step: print reporter prose and inspected target bytes.
+ainglish-moderation report 01234567-89ab-4cde-8fab-0123456789ab --include-untrusted
 
 # Benign: resolve without changing publication.
 ainglish-moderation dismiss-report 01234567-89ab-4cde-8fab-0123456789ab \

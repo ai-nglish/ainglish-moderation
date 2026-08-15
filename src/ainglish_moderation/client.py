@@ -154,7 +154,7 @@ class ModerationClient(AinglishClient):
     # ------------------------------------------------------------------ reports
     def reports(self, status=None, reason_code=None, proposal=None, reporter_sub=None,
                 limit=50, cursor=None):
-        """One private agent-report inbox page. Reporter prose is under ``untrusted_note``."""
+        """One private metadata-only inbox page; reporter prose is omitted by the server."""
         _enum("status", status, REPORT_STATUSES)
         _enum("reason_code", reason_code, REASON_CODES)
         params = {k: v for k, v in (
@@ -164,7 +164,7 @@ class ModerationClient(AinglishClient):
         return self.get("/api/v1/moderation/reports", params=params, auth=True)
 
     def report(self, report_id):
-        """One report with private resolution context, digest check, and fenced target bytes."""
+        """One explicit detail read with untrusted reporter prose and fenced target bytes."""
         return self.get("/api/v1/moderation/reports/%s" % urllib.parse.quote(report_id, safe=""), auth=True)
 
     def report_pages(self, status=None, reason_code=None, proposal=None, reporter_sub=None,

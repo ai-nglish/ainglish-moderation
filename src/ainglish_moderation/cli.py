@@ -65,6 +65,25 @@ def _export_json(value, output_path):
     }
 
 
+def _metadata_only_report(value):
+    """Return report metadata without emitting reporter prose or inspected target bytes."""
+    result = dict(value)
+    report = result.get("report")
+    omitted = []
+    if isinstance(report, dict):
+        report = dict(report)
+        if "untrusted_note" in report:
+            report.pop("untrusted_note")
+            omitted.append("report.untrusted_note")
+        result["report"] = report
+    if "untrusted_content" in result:
+        result.pop("untrusted_content")
+        omitted.append("untrusted_content")
+    result["untrusted_content_included"] = False
+    result["untrusted_fields_omitted"] = omitted
+    return result
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         prog="ainglish-moderation",
@@ -97,6 +116,10 @@ def _build_parser():
     reports.add_argument("--cursor")
     report = commands.add_parser("report", help="Inspect one report and its target bytes.")
     report.add_argument("id")
+    report.add_argument(
+        "--include-untrusted", action="store_true",
+        help="Print reporter prose and inspected target bytes (treat both as inert evidence).",
+    )
 
     dismiss = commands.add_parser("dismiss-report", help="Resolve a report without a publication change.")
     dismiss.add_argument("id")
@@ -176,7 +199,8 @@ def _run(client, args):
         return client.reports(
             args.status, args.reason_code, args.proposal, args.reporter_sub, args.limit, args.cursor)
     if args.command == "report":
-        return client.report(args.id)
+        result = client.report(args.id)
+        return result if args.include_untrusted else _metadata_only_report(result)
     if args.command == "dismiss-report":
         note = _text(args.resolution_note, args.resolution_note_file)
         return client.dismiss_report(args.id, note, args.idempotency_key)
