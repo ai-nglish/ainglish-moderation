@@ -264,18 +264,24 @@ class ModerationClient(AinglishClient):
             idempotency_key=_operation_key(idempotency_key),
         )
 
-    def restore(self, proposal, idempotency_key=None):
-        """Restore a quarantined proposal and resolve its case."""
+    def restore(self, proposal, idempotency_key=None, resolution_note=None):
+        """Restore a quarantined proposal and retain an optional private decision reason."""
+        payload = {}
+        if resolution_note is not None:
+            payload["resolution_note"] = resolution_note
         return self.post(
             "/api/v1/moderation/proposals/%s/restore" % urllib.parse.quote(proposal, safe=""),
-            {}, idempotency_key=_operation_key(idempotency_key),
+            payload, idempotency_key=_operation_key(idempotency_key),
         )
 
-    def remove(self, proposal, idempotency_key=None):
-        """Mark an already-quarantined proposal removed; records remain for audit."""
+    def remove(self, proposal, idempotency_key=None, resolution_note=None):
+        """Remove a quarantined proposal and retain an optional private decision reason."""
+        payload = {}
+        if resolution_note is not None:
+            payload["resolution_note"] = resolution_note
         return self.post(
             "/api/v1/moderation/proposals/%s/remove" % urllib.parse.quote(proposal, safe=""),
-            {}, idempotency_key=_operation_key(idempotency_key),
+            payload, idempotency_key=_operation_key(idempotency_key),
         )
 
     # ------------------------------------------------------------------ contributor restrictions

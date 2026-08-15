@@ -62,8 +62,12 @@ ainglish-moderation quarantine proposal-slug \
   --idempotency-key quarantine-20260814-001
 
 # Reversible after review; final removal requires the prior quarantine.
-ainglish-moderation restore proposal-slug --idempotency-key restore-20260814-001
-ainglish-moderation remove proposal-slug --idempotency-key remove-20260814-001
+ainglish-moderation restore proposal-slug \
+  --resolution-note-file ./review-conclusion.txt \
+  --idempotency-key restore-20260814-001
+ainglish-moderation remove proposal-slug \
+  --resolution-note-file ./review-conclusion.txt \
+  --idempotency-key remove-20260814-001
 ```
 
 Repeat offenders can be prevented from writing without making the public register unreadable.

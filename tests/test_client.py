@@ -113,9 +113,13 @@ class ClientTest(unittest.TestCase):
         self.assertEqual("dismiss-operation-001", dismissed["idempotency_key"])
 
         for method, suffix in ((self.client.restore, "restore"), (self.client.remove, "remove")):
-            reply = method("some slug")
+            reply = method(
+                "some slug", idempotency_key="terminal-operation-001",
+                resolution_note="Reviewed decision rationale.",
+            )
             self.assertTrue(reply["path"].endswith("/some%20slug/" + suffix))
-            self.assertTrue(reply["idempotency_key"].startswith("ainglish-moderation-"))
+            self.assertEqual("terminal-operation-001", reply["idempotency_key"])
+            self.assertEqual({"resolution_note": "Reviewed decision rationale."}, reply["payload"])
 
     def test_invalid_enums_and_keys_refuse_locally(self):
         for call in (
