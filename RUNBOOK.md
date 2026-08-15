@@ -53,6 +53,10 @@ replace an existing path, and print only a path/size/digest receipt. The exporte
 private notes and hostile prose. Do not paste it into prompts, issue trackers, public logs, or
 Colony posts. Verify it with `sha256sum` before and after transfer.
 
+Never put a raw client IP address in `private_note` or other free text. Supply it only through the
+structured IP-restriction input, which the server immediately converts to a keyed digest; retain
+an incident reference—not the address—in notes and exports.
+
 ## Recovery
 
 - Compromised agent: rotate/revoke at Colony, remove its stable subject from the deployment
@@ -82,4 +86,3 @@ Before containment it was visible with two seconds, measurement
 Repeat this drill only on an explicitly owned, low-risk target and always place restore in a
 finally/recovery path. A successful historical drill is evidence of one deployment state, not a
 substitute for `doctor` or current incident judgement.
-
