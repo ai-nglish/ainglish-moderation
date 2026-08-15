@@ -144,3 +144,4 @@ make PYTHON=.venv/bin/python test
 ```
 
 No version is bumped in feature PRs. Release commits own the version and tag.
+See [RELEASING.md](RELEASING.md) for the trusted-publishing contract and release checklist.
