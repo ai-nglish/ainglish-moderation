@@ -12,7 +12,7 @@ class Probe(ModerationClient):
 
     def get(self, path, params=None, auth=False):
         self.calls.append(("GET", path, params, auth))
-        if path.endswith("/cases") or path.endswith("/reports"):
+        if path.endswith("/cases") or path.endswith("/reports") or path.endswith("/restrictions"):
             return self.pages.get(params.get("cursor") if params else None, {})
         return {"path": path}
 
@@ -99,6 +99,61 @@ class ClientTest(unittest.TestCase):
         for size in (0, 101, True, "20"):
             with self.assertRaises(ValueError):
                 list(self.client.iter_cases(page_size=size))
+
+    def test_restriction_reads_and_mutations_keep_wire_contracts_exact(self):
+        self.client.restrictions(status="active", subject_type="colony_sub", limit=20, cursor="opaque")
+        self.assertEqual(("GET", "/api/v1/moderation/restrictions", {
+            "status": "active", "subject_type": "colony_sub", "limit": 20, "cursor": "opaque",
+        }, True), self.client.calls[-1])
+        self.client.restriction("restriction/id")
+        self.assertEqual("/api/v1/moderation/restrictions/restriction%2Fid", self.client.calls[-1][1])
+
+        user = self.client.restrict_colony_sub(
+            "stable-sub", "spam", "Repeated unrelated submissions.", "private",
+            "2026-08-15T12:00:00Z", "restrict-user-001")
+        self.assertEqual("/api/v1/moderation/restrictions", user["path"])
+        self.assertEqual({
+            "subject": {"type": "colony_sub", "value": "stable-sub"},
+            "reason_code": "spam",
+            "public_explanation": "Repeated unrelated submissions.",
+            "private_note": "private",
+            "expires_at": "2026-08-15T12:00:00Z",
+        }, user["payload"])
+        self.assertEqual("restrict-user-001", user["idempotency_key"])
+
+        ip = self.client.restrict_ip(
+            "203.0.113.9", "malicious_payload", "Automated abuse.",
+            expires_at=None, idempotency_key="restrict-ip-0001")
+        self.assertEqual("ip", ip["payload"]["subject"]["type"])
+        self.assertEqual("203.0.113.9", ip["payload"]["subject"]["value"])
+        self.assertIsNone(ip["payload"]["expires_at"])
+
+        revoked = self.client.revoke_restriction("restriction/id", "revoke-restriction-01")
+        self.assertEqual("/api/v1/moderation/restrictions/restriction%2Fid/revoke", revoked["path"])
+        self.assertEqual({}, revoked["payload"])
+
+    def test_restriction_validation_and_pagination_fail_closed(self):
+        for call in (
+            lambda: self.client.restrictions(status="unknown"),
+            lambda: self.client.restrictions(subject_type="username"),
+            lambda: self.client.restrict_colony_sub("", "spam", "reason"),
+            lambda: self.client.restrict_colony_sub("sub", "made-up", "reason"),
+            lambda: self.client.restrict_colony_sub("sub", "spam", ""),
+            lambda: self.client.restrict_ip("203.0.113.1", "spam", "reason", expires_at=123),
+        ):
+            with self.assertRaises(ValueError):
+                call()
+
+        self.client.pages = {
+            None: {"restrictions": [{"id": "first"}],
+                   "pagination": {"returned": 1, "has_more": True, "next_cursor": "next"}},
+            "next": {"restrictions": [{"id": "second"}],
+                     "pagination": {"returned": 1, "has_more": False, "next_cursor": None}},
+        }
+        self.assertEqual(
+            ["first", "second"],
+            [row["id"] for row in self.client.iter_restrictions(page_size=1)],
+        )
 
 
 if __name__ == "__main__":

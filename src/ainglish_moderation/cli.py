@@ -7,7 +7,10 @@ import sys
 
 from ainglish.client import AinglishError
 
-from .client import CASE_STATUSES, REASON_CODES, REPORT_STATUSES, ModerationClient
+from .client import (
+    CASE_STATUSES, REASON_CODES, REPORT_STATUSES, RESTRICTION_STATUSES,
+    RESTRICTION_SUBJECT_TYPES, ModerationClient,
+)
 
 
 def _text(value, file_path):
@@ -79,7 +82,40 @@ def _build_parser():
         command = commands.add_parser(name, help=help_text)
         command.add_argument("proposal")
         command.add_argument("--idempotency-key")
+
+    restrictions = commands.add_parser("restrictions", help="List contributor write restrictions.")
+    restrictions.add_argument("--status", choices=RESTRICTION_STATUSES)
+    restrictions.add_argument("--subject-type", choices=RESTRICTION_SUBJECT_TYPES)
+    restrictions.add_argument("--limit", type=int, default=50)
+    restrictions.add_argument("--cursor")
+    restriction = commands.add_parser("restriction", help="Inspect one restriction and its audit events.")
+    restriction.add_argument("id")
+
+    restrict_user = commands.add_parser(
+        "restrict-user", help="Restrict writes by immutable Colony subject UUID.")
+    restrict_user.add_argument("colony_sub")
+    _restriction_terms(restrict_user)
+
+    restrict_ip = commands.add_parser(
+        "restrict-ip", help="Restrict one exact IP read from a local file (raw IP is never printed).")
+    restrict_ip.add_argument("--ip-file", required=True)
+    _restriction_terms(restrict_ip)
+
+    revoke = commands.add_parser("revoke-restriction", help="Revoke a restriction but retain its audit history.")
+    revoke.add_argument("id")
+    revoke.add_argument("--idempotency-key")
     return parser
+
+
+def _restriction_terms(command):
+    command.add_argument("--reason-code", required=True, choices=REASON_CODES)
+    command.add_argument("--public-explanation", required=True)
+    command.add_argument("--private-note")
+    command.add_argument("--private-note-file")
+    expiry = command.add_mutually_exclusive_group(required=True)
+    expiry.add_argument("--expires-at", help="ISO-8601 timestamp with timezone.")
+    expiry.add_argument("--permanent", action="store_true", help="Permanent until audited revocation.")
+    command.add_argument("--idempotency-key")
 
 
 def _run(client, args):
@@ -106,6 +142,23 @@ def _run(client, args):
         return client.restore(args.proposal, args.idempotency_key)
     if args.command == "remove":
         return client.remove(args.proposal, args.idempotency_key)
+    if args.command == "restrictions":
+        return client.restrictions(args.status, args.subject_type, args.limit, args.cursor)
+    if args.command == "restriction":
+        return client.restriction(args.id)
+    if args.command in ("restrict-user", "restrict-ip"):
+        note = _text(args.private_note, args.private_note_file)
+        expires_at = None if args.permanent else args.expires_at
+        if args.command == "restrict-user":
+            return client.restrict_colony_sub(
+                args.colony_sub, args.reason_code, args.public_explanation,
+                note, expires_at, args.idempotency_key)
+        ip_address = _text(None, args.ip_file).strip()
+        return client.restrict_ip(
+            ip_address, args.reason_code, args.public_explanation,
+            note, expires_at, args.idempotency_key)
+    if args.command == "revoke-restriction":
+        return client.revoke_restriction(args.id, args.idempotency_key)
     raise AssertionError("unhandled command")
 
 
