@@ -81,7 +81,7 @@ class ModerationClient(AinglishClient):
 
         def discovery_contract(value):
             endpoints = value.get("moderator_endpoints") if isinstance(value, dict) else None
-            required = {"cases", "reports", "restrictions", "create_restriction",
+            required = {"cases", "reports", "inbox_status", "restrictions", "create_restriction",
                         "revoke_restriction"}
             if not isinstance(endpoints, dict) or not required.issubset(endpoints):
                 raise ValueError("API discovery is missing moderation operations: %s" %
@@ -186,47 +186,85 @@ class ModerationClient(AinglishClient):
     def inbox_status(self, page_size=100, now=None):
         """Return a content-free health receipt for unattended inbox monitoring.
 
-        This traverses only new report summaries and deliberately returns neither row data nor
-        reporter-supplied prose. It performs no mutation. ``now`` exists for deterministic tests;
-        normal callers should leave it unset.
+        The server answers from one aggregate query and returns neither report rows nor
+        reporter-supplied prose. ``page_size`` remains as a validated compatibility argument for
+        callers of the original paginated implementation; it no longer controls any traversal.
+        ``now`` exists for deterministic tests; normal callers should leave it unset.
         """
-        checked_at = datetime.now(timezone.utc) if now is None else now
-        if not isinstance(checked_at, datetime) or checked_at.tzinfo is None \
-                or checked_at.utcoffset() is None:
+        if not isinstance(page_size, int) or isinstance(page_size, bool) or not 1 <= page_size <= 100:
+            raise ValueError("page_size must be an integer from 1 to 100")
+        checked_at = now
+        if checked_at is not None and (not isinstance(checked_at, datetime)
+                                       or checked_at.tzinfo is None
+                                       or checked_at.utcoffset() is None):
             raise ValueError("now must be a timezone-aware datetime")
-        checked_at = checked_at.astimezone(timezone.utc)
 
-        report_count = 0
-        oldest = None
-        for report in self.iter_reports(status="new", page_size=page_size):
-            created_at = report.get("created_at") if isinstance(report, dict) else None
-            if not isinstance(created_at, str):
+        receipt = self.get("/api/v1/moderation/reports/inbox-status", auth=True)
+        if not isinstance(receipt, dict) or receipt.get("kind") != "ainglish.moderation.inbox_status":
+            raise AinglishError(502, {
+                "error": "invalid_contract",
+                "message": "moderation inbox status returned an unexpected envelope",
+            })
+        count = receipt.get("new_reports")
+        attention = receipt.get("attention_required")
+        oldest_raw = receipt.get("oldest_new_report_at")
+        age = receipt.get("oldest_new_report_age_seconds")
+        checked_raw = receipt.get("checked_at")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0 \
+                or not isinstance(attention, bool) or attention != (count > 0) \
+                or receipt.get("mutations_performed") != 0 \
+                or receipt.get("untrusted_content_included") is not False:
+            raise AinglishError(502, {
+                "error": "invalid_contract",
+                "message": "moderation inbox status lost its content-free health contract",
+            })
+
+        def parse_timestamp(value, field):
+            if not isinstance(value, str):
                 raise AinglishError(502, {
                     "error": "invalid_contract",
-                    "message": "new report summary lost its created_at timestamp",
+                    "message": "moderation inbox status returned an invalid %s timestamp" % field,
                 })
             try:
                 parsed = datetime.fromisoformat(
-                    created_at[:-1] + "+00:00" if created_at.endswith("Z") else created_at
+                    value[:-1] + "+00:00" if value.endswith("Z") else value
                 )
             except ValueError:
                 parsed = None
             if parsed is None or parsed.tzinfo is None or parsed.utcoffset() is None:
                 raise AinglishError(502, {
                     "error": "invalid_contract",
-                    "message": "new report summary returned an invalid created_at timestamp",
+                    "message": "moderation inbox status returned an invalid %s timestamp" % field,
                 })
-            parsed = parsed.astimezone(timezone.utc)
-            oldest = parsed if oldest is None or parsed < oldest else oldest
-            report_count += 1
+            return parsed.astimezone(timezone.utc)
 
-        age_seconds = None if oldest is None else max(0, int((checked_at - oldest).total_seconds()))
+        server_checked_at = parse_timestamp(checked_raw, "checked_at")
+        oldest = None if oldest_raw is None else parse_timestamp(oldest_raw, "oldest_new_report_at")
+        if count == 0:
+            if oldest is not None or age is not None:
+                raise AinglishError(502, {
+                    "error": "invalid_contract",
+                    "message": "an empty moderation inbox returned non-empty age metadata",
+                })
+        elif oldest is None or not isinstance(age, int) or isinstance(age, bool) or age < 0:
+            raise AinglishError(502, {
+                "error": "invalid_contract",
+                "message": "a non-empty moderation inbox lost its oldest-report age metadata",
+            })
+
+        checked_at = server_checked_at if checked_at is None else checked_at.astimezone(timezone.utc)
+        if oldest is not None and now is not None:
+            age = max(0, int((checked_at - oldest).total_seconds()))
+
+        # Construct a strict allowlist rather than returning the server object. If a future server
+        # accidentally adds rows or prose, this content-free command still cannot print them.
         return {
             "kind": "ainglish.moderation.inbox_status",
-            "attention_required": report_count > 0,
-            "new_reports": report_count,
+            "attention_required": attention,
+            "new_reports": count,
             "oldest_new_report_at": oldest.isoformat().replace("+00:00", "Z") if oldest else None,
-            "oldest_new_report_age_seconds": age_seconds,
+            "oldest_new_report_age_seconds": age,
+            "checked_at": checked_at.isoformat().replace("+00:00", "Z"),
             "mutations_performed": 0,
             "untrusted_content_included": False,
         }
