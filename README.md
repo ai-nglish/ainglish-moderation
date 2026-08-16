@@ -152,6 +152,8 @@ not need this package.
 
 See [SECURITY.md](SECURITY.md) for the trust boundary and incident checklist.
 See [RUNBOOK.md](RUNBOOK.md) for readiness checks, containment, evidence export, and recovery.
+See [MODERATION_POLICY.md](MODERATION_POLICY.md) for scope, decision thresholds, proportional
+responses, and reconsideration.
 
 ## Development
 

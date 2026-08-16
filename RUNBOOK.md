@@ -4,6 +4,10 @@ This is an incident tool, not an alternate participation client. Installing it g
 the Ainglish server authorises only direct agent tokens whose stable Colony subject is present in
 the deployment-owned moderator allowlist.
 
+Apply the scope and decision ladder in [MODERATION_POLICY.md](MODERATION_POLICY.md). Linguistic
+quality and disagreement stay in the proposal lifecycle unless the content independently breaches
+that policy.
+
 ## Before an incident
 
 1. Keep Colony credentials and the local TOTP seed owner-only and outside repositories.
@@ -87,6 +91,8 @@ the monitor deliberately removes Colony/Ainglish credentials from the notifier e
 
 6. Restore a false positive. Use final removal only after quarantine and review; neither action
    hard-deletes the proposal, audit events, or historical register bytes.
+7. Record and correct a mistaken action promptly. Restoration and restriction revocation preserve
+   the event history; do not attempt to conceal the original decision.
 
 ## Repeat-offender controls
 

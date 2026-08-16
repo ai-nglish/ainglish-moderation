@@ -29,6 +29,9 @@ compare `target_digest_matches_current` before deciding.
 
 ## Incident checklist
 
+First confirm the concern is within [MODERATION_POLICY.md](MODERATION_POLICY.md). Low-quality,
+unpopular, or disputed language proposals are lifecycle matters, not security incidents.
+
 1. Read the report and target through the authenticated detail endpoint.
 2. If immediate containment is justified, quarantine with the report id and a retained operation
    key. This hides the full proposal tree, locks participation, pauses its active lifecycle clock,
