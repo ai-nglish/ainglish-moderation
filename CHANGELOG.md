@@ -12,6 +12,8 @@
   disagreement and sets a least-disruptive, reversible-first response ladder.
 - Let one quarantine action an explicit bounded report set atomically, and let later matching
   reports be linked to an existing case through a separately idempotent operation.
+- Expose the server's explicit `allow_self` confirmation for emergency self-restriction while
+  keeping accidental moderator identity/address lockout fail-closed by default.
 
 ## 0.1.1 — 2026-08-15
 

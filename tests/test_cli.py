@@ -295,8 +295,18 @@ class CliTest(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("", error)
         self.assertEqual((
-            "stable-sub", "spam", "Repeated submissions.", None, None, "restrict-user-01",
+            "stable-sub", "spam", "Repeated submissions.", None, None, "restrict-user-01", False,
         ), fake.calls[0][1])
+
+        fake = FakeClient()
+        code, _, error = self.run_cli(fake, [
+            "restrict-user", "moderator-sub", "--reason-code", "compromised_account",
+            "--public-explanation", "Emergency containment.", "--expires-at", "2026-08-15T12:00:00Z",
+            "--allow-self", "--idempotency-key", "self-restrict-001",
+        ])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertTrue(fake.calls[0][1][-1])
 
     def test_restrict_ip_reads_sensitive_address_from_file_and_never_prints_it(self):
         fake = FakeClient()
