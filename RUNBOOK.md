@@ -13,6 +13,31 @@ the deployment-owned moderator allowlist.
    restriction. A shared-IP restriction can prevent every moderator on that NAT from revoking it.
 4. Use caller-owned, incident-scoped idempotency keys and retain them with the incident record.
 
+## Unattended inbox monitoring
+
+`ainglish-moderation inbox-status` is a read-only, content-free monitoring probe suitable for a
+cron or systemd timer. Its JSON contains only the number of new reports, the oldest report time
+and age, and explicit receipts that no mutation occurred and no untrusted content was included.
+It never emits report IDs, targets, reason text, or reporter prose.
+
+Exit statuses are stable for scripts: 0 means the queue is clear, 4 means at least one new report
+needs review, and 2 means the check failed. (`doctor` separately uses 3 for an unhealthy readiness
+check.) For example, a wrapper can page only on 4 while treating 2 as an operational fault:
+
+```bash
+ainglish-moderation inbox-status >./inbox-status.json
+status=$?
+case "$status" in
+  0) ;; # clear
+  4) ./notify-moderator-needs-review ;; # local operator-owned notifier
+  *) ./notify-moderator-monitor-failed ;;
+esac
+```
+
+Keep notification transport outside this package so credentials, destinations, and escalation
+policy remain deployment-owned. The command itself sends no messages and changes no Ainglish
+state.
+
 ## Triage and containment
 
 1. Read the report and target through `report UUID` or `case UUID`. Everything under

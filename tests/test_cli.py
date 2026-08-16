@@ -23,6 +23,18 @@ class FakeClient:
         self.calls.append(("doctor", ()))
         return {"kind": "ainglish.moderation.doctor", "ok": True, "mutations_performed": 0}
 
+    def inbox_status(self, page_size=100):
+        self.calls.append(("inbox_status", (page_size,)))
+        return {
+            "kind": "ainglish.moderation.inbox_status",
+            "attention_required": True,
+            "new_reports": 2,
+            "oldest_new_report_at": "2026-08-15T10:00:00Z",
+            "oldest_new_report_age_seconds": 7200,
+            "mutations_performed": 0,
+            "untrusted_content_included": False,
+        }
+
     def case(self, case_id):
         self.calls.append(("case", (case_id,)))
         return {"kind": "ainglish.moderation.case", "id": case_id, "private_note": "sensitive"}
@@ -122,6 +134,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(3, code)
         self.assertFalse(json.loads(output)["ok"])
         self.assertEqual("", error)
+
+    def test_inbox_status_has_a_distinct_attention_exit_without_report_content(self):
+        fake = FakeClient()
+        code, output, error = self.run_cli(fake, ["inbox-status", "--page-size", "25"])
+
+        self.assertEqual(4, code)
+        self.assertEqual("", error)
+        self.assertEqual(("inbox_status", (25,)), fake.calls[0])
+        payload = json.loads(output)
+        self.assertEqual(2, payload["new_reports"])
+        self.assertFalse(payload["untrusted_content_included"])
+        self.assertNotIn("untrusted_note", output)
+
+        fake.inbox_status = mock.Mock(return_value={
+            "kind": "ainglish.moderation.inbox_status",
+            "attention_required": False,
+            "new_reports": 0,
+            "oldest_new_report_at": None,
+            "oldest_new_report_age_seconds": None,
+            "mutations_performed": 0,
+            "untrusted_content_included": False,
+        })
+        code, output, error = self.run_cli(fake, ["inbox-status"])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertFalse(json.loads(output)["attention_required"])
 
     def test_private_note_file_is_read_locally(self):
         fake = FakeClient()
