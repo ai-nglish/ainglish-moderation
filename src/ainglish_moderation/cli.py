@@ -13,6 +13,7 @@ from .client import (
     CASE_STATUSES, REASON_CODES, REPORT_STATUSES, RESTRICTION_STATUSES,
     RESTRICTION_SUBJECT_TYPES, ModerationClient,
 )
+from .monitor import default_state_path, monitor_inbox
 
 
 def _text(value, file_path):
@@ -100,6 +101,16 @@ def _build_parser():
     inbox_status = commands.add_parser(
         "inbox-status", help="Return a content-free status receipt for unattended monitoring.")
     inbox_status.add_argument("--page-size", type=int, default=100)
+    monitor = commands.add_parser(
+        "monitor-inbox", help="Persist aggregate status and notify only on inbox transitions.")
+    monitor.add_argument(
+        "--state-file", default=os.environ.get(
+            "AINGLISH_MODERATION_MONITOR_STATE", default_state_path()))
+    monitor.add_argument(
+        "--notify-program", default=os.environ.get("AINGLISH_MODERATION_NOTIFY_PROGRAM"),
+        help=("Absolute path to an owner-controlled executable receiving content-free JSON "
+              "on stdin."))
+    monitor.add_argument("--notify-timeout", type=float, default=15.0)
 
     cases = commands.add_parser("cases", help="List moderation cases.")
     cases.add_argument("--status", choices=CASE_STATUSES)
@@ -198,6 +209,8 @@ def _run(client, args):
         return client.doctor()
     if args.command == "inbox-status":
         return client.inbox_status(args.page_size)
+    if args.command == "monitor-inbox":
+        return monitor_inbox(client, args.state_file, args.notify_program, args.notify_timeout)
     if args.command == "cases":
         return client.cases(args.status, args.reason_code, args.target_type, args.limit, args.cursor)
     if args.command == "case":
@@ -256,7 +269,7 @@ def main(argv=None):
         print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
         if args.command == "doctor" and not result.get("ok"):
             return 3
-        if args.command == "inbox-status" and result.get("attention_required"):
+        if args.command in ("inbox-status", "monitor-inbox") and result.get("attention_required"):
             return 4
         return 0
     except AinglishError as error:

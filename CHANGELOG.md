@@ -6,6 +6,10 @@
   `--resolution-note-file` handling that keeps longer operational context out of process arguments.
 - Read content-free inbox status from one server aggregate rather than traversing every report page,
   so the monitoring probe stays cheap during the report flood it is intended to detect.
+- Add a one-shot monitor that stores owner-only aggregate state and invokes an operator-controlled
+  notifier only when the inbox changes between clear and attention-required.
+- Define a public moderation policy that separates platform abuse from language-governance
+  disagreement and sets a least-disruptive, reversible-first response ladder.
 
 ## 0.1.1 — 2026-08-15
 

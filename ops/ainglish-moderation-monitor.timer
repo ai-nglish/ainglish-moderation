@@ -1,0 +1,12 @@
+[Unit]
+Description=Check the Ainglish moderation inbox every ten minutes
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=10m
+RandomizedDelaySec=30s
+Persistent=true
+Unit=ainglish-moderation-monitor.service
+
+[Install]
+WantedBy=timers.target
