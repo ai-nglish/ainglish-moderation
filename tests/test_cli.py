@@ -71,6 +71,10 @@ class FakeClient:
         self.calls.append(("remove", args))
         return {"ok": True}
 
+    def action_reports(self, *args):
+        self.calls.append(("action_reports", args))
+        return {"ok": True}
+
     def restrictions(self, *args):
         self.calls.append(("restrictions", args))
         return {"restrictions": []}
@@ -200,6 +204,31 @@ class CliTest(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("", error)
         self.assertEqual("private review context", fake.calls[0][1][3])
+
+    def test_repeated_report_ids_and_later_case_linking_are_explicit(self):
+        fake = FakeClient()
+        code, _, error = self.run_cli(fake, [
+            "quarantine", "some-slug", "--reason-code", "spam",
+            "--report-id", "report-1", "--report-id", "report-2",
+            "--idempotency-key", "multi-report-operation",
+        ])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertEqual((
+            "some-slug", "spam", None, None, None, "multi-report-operation",
+            ["report-1", "report-2"],
+        ), fake.calls[0][1])
+
+        fake = FakeClient()
+        code, _, error = self.run_cli(fake, [
+            "action-reports", "case-1", "report-1", "report-2",
+            "--idempotency-key", "later-report-operation",
+        ])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertEqual((
+            "case-1", ["report-1", "report-2"], "later-report-operation",
+        ), fake.calls[0][1])
 
     def test_conflicting_note_sources_fail_without_an_api_call(self):
         fake = FakeClient()

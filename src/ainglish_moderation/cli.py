@@ -147,8 +147,17 @@ def _build_parser():
     quarantine.add_argument("--public-explanation")
     quarantine.add_argument("--private-note")
     quarantine.add_argument("--private-note-file")
-    quarantine.add_argument("--report-id")
+    quarantine.add_argument(
+        "--report-id", action="append", dest="report_ids",
+        help="Source report to action atomically; repeat for an explicit set (maximum 20).",
+    )
     quarantine.add_argument("--idempotency-key")
+
+    action_reports = commands.add_parser(
+        "action-reports", help="Link matching reports to an existing moderation case.")
+    action_reports.add_argument("case_id")
+    action_reports.add_argument("report_ids", nargs="+")
+    action_reports.add_argument("--idempotency-key")
 
     for name, help_text in (("restore", "Restore a quarantined proposal."),
                             ("remove", "Mark a quarantined proposal removed.")):
@@ -226,9 +235,13 @@ def _run(client, args):
         return client.dismiss_report(args.id, note, args.idempotency_key)
     if args.command == "quarantine":
         note = _text(args.private_note, args.private_note_file)
+        legacy_report = args.report_ids[0] if args.report_ids and len(args.report_ids) == 1 else None
+        report_set = args.report_ids if args.report_ids and len(args.report_ids) > 1 else None
         return client.quarantine(
             args.proposal, args.reason_code, args.public_explanation, note,
-            args.report_id, args.idempotency_key)
+            legacy_report, args.idempotency_key, report_set)
+    if args.command == "action-reports":
+        return client.action_reports(args.case_id, args.report_ids, args.idempotency_key)
     if args.command == "restore":
         note = _text(args.resolution_note, args.resolution_note_file)
         return client.restore(args.proposal, args.idempotency_key, note)

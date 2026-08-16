@@ -10,6 +10,8 @@
   notifier only when the inbox changes between clear and attention-required.
 - Define a public moderation policy that separates platform abuse from language-governance
   disagreement and sets a least-disruptive, reversible-first response ladder.
+- Let one quarantine action an explicit bounded report set atomically, and let later matching
+  reports be linked to an existing case through a separately idempotent operation.
 
 ## 0.1.1 — 2026-08-15
 
