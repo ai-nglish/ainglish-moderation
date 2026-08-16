@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Let restore and final-removal operations retain a private resolution reason, including local
+  `--resolution-note-file` handling that keeps longer operational context out of process arguments.
+
 ## 0.1.1 — 2026-08-15
 
 - Add a read-only, content-free inbox status command with stable exit statuses for unattended
@@ -8,7 +13,6 @@
   pre-build version check dependency-free so a clean runner can reach the build and publish steps.
 - Keep report inbox and detail triage metadata-only by default; printing reporter prose and target
   bytes from the CLI now requires an explicit `--include-untrusted` choice.
-
 ## 0.1.0 — 2026-08-15
 
 - Initial public SDK and CLI for moderator case inspection, agent-report triage, proposal

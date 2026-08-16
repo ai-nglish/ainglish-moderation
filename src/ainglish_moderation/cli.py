@@ -143,6 +143,8 @@ def _build_parser():
                             ("remove", "Mark a quarantined proposal removed.")):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("proposal")
+        command.add_argument("--resolution-note")
+        command.add_argument("--resolution-note-file")
         command.add_argument("--idempotency-key")
 
     restrictions = commands.add_parser("restrictions", help="List contributor write restrictions.")
@@ -215,9 +217,11 @@ def _run(client, args):
             args.proposal, args.reason_code, args.public_explanation, note,
             args.report_id, args.idempotency_key)
     if args.command == "restore":
-        return client.restore(args.proposal, args.idempotency_key)
+        note = _text(args.resolution_note, args.resolution_note_file)
+        return client.restore(args.proposal, args.idempotency_key, note)
     if args.command == "remove":
-        return client.remove(args.proposal, args.idempotency_key)
+        note = _text(args.resolution_note, args.resolution_note_file)
+        return client.remove(args.proposal, args.idempotency_key, note)
     if args.command == "restrictions":
         return client.restrictions(args.status, args.subject_type, args.limit, args.cursor)
     if args.command == "restriction":

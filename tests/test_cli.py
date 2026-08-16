@@ -63,6 +63,14 @@ class FakeClient:
         self.calls.append(("quarantine", args))
         return {"ok": True}
 
+    def restore(self, *args):
+        self.calls.append(("restore", args))
+        return {"ok": True}
+
+    def remove(self, *args):
+        self.calls.append(("remove", args))
+        return {"ok": True}
+
     def restrictions(self, *args):
         self.calls.append(("restrictions", args))
         return {"restrictions": []}
@@ -185,6 +193,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual("", output)
         self.assertIn("choose inline text or a file", error)
         self.assertEqual([], fake.calls)
+
+    def test_terminal_resolution_note_file_is_read_locally(self):
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "resolution.txt")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("False positive confirmed against source material.")
+            code, _, error = self.run_cli(fake, [
+                "restore", "some-slug", "--resolution-note-file", path,
+                "--idempotency-key", "restore-operation-001",
+            ])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertEqual((
+            "some-slug", "restore-operation-001",
+            "False positive confirmed against source material.",
+        ), fake.calls[0][1])
 
     def test_credentials_are_not_cli_options(self):
         help_text = cli._build_parser().format_help()
