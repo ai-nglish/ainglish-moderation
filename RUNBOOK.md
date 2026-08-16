@@ -16,9 +16,10 @@ the deployment-owned moderator allowlist.
 ## Unattended inbox monitoring
 
 `ainglish-moderation inbox-status` is a read-only, content-free monitoring probe suitable for a
-cron or systemd timer. Its JSON contains only the number of new reports, the oldest report time
-and age, and explicit receipts that no mutation occurred and no untrusted content was included.
-It never emits report IDs, targets, reason text, or reporter prose.
+cron or systemd timer. One server-side aggregate query returns the number of new reports, the
+oldest report time and age, and explicit receipts that no mutation occurred and no untrusted
+content was included.
+The client never retrieves or emits report IDs, targets, reason text, or reporter prose.
 
 Exit statuses are stable for scripts: 0 means the queue is clear, 4 means at least one new report
 needs review, and 2 means the check failed. (`doctor` separately uses 3 for an unhealthy readiness

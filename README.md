@@ -105,8 +105,8 @@ Every mutation accepts a caller-owned `Idempotency-Key`; when omitted, the clien
 For operational recovery, supply and retain your own key. Case and report listings use stable,
 opaque cursor pagination; `iter_cases()` and `iter_reports()` validate and traverse it for you.
 
-For unattended monitoring, `inbox-status` traverses new-report metadata and emits only a count,
-oldest age, and explicit zero-mutation/content-omission receipts. It never prints report rows or
+For unattended monitoring, `inbox-status` reads one server-side aggregate and emits only a count,
+oldest age, and explicit zero-mutation/content-omission receipts. It never retrieves report rows or
 reporter prose. Exit status 0 means the inbox is clear, 4 means review is needed, and 2 means the
 check itself failed; see the runbook for a timer example.
 
