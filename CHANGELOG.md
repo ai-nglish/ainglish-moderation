@@ -14,6 +14,8 @@
   reports be linked to an existing case through a separately idempotent operation.
 - Expose the server's explicit `allow_self` confirmation for emergency self-restriction while
   keeping accidental moderator identity/address lockout fail-closed by default.
+- Align the release runbook with the proven automatic PyPI trusted-publishing environment and
+  current required-check names.
 
 ## 0.1.1 — 2026-08-15
 

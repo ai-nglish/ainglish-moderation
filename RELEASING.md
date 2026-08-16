@@ -27,13 +27,10 @@ release commit, renames that heading to `## X.Y.Z — YYYY-MM-DD` and moves both
 the number is claimed at the moment the chain below is about to prove it. A number that was never
 claimed can never be burned.
 
-**Note on the current 0.1.0 stamps.** `pyproject.toml` and `__init__.py` already read `0.1.0`
-because that is a package's honest pre-release state, not a pre-bump. The first release commit
-therefore moves the changelog heading only, and every release after it moves all three together.
-
 ## Publishing: trusted publishing, no tokens
 
-The PyPI project has a **pending trusted publisher** (configured 2026-08-15) bound to:
+The PyPI project has a **verified trusted publisher** (first successful publication: v0.1.1 on
+2026-08-16) bound to:
 
 | Field | Value |
 |---|---|
@@ -52,7 +49,8 @@ It deliberately has no required reviewers or wait timer, matching the sibling SD
 independently reviewed release PR and pushing its immutable version tag are the release decision,
 and the tag starts publication without a second manual gate. The deployment branch policy remains
 empty — a "protected branches only" policy would block deployments originating from tags, which
-is how this workflow fires.
+is how this workflow fires. Verify settings by read-back after changing them: a successful
+environment update does not prove that omitted reviewer rules were cleared.
 
 ## Branch protection
 
@@ -68,10 +66,9 @@ it to good manners; conversation resolution required; force pushes and branch de
 **administrators included**, so no collaborator holds a standing bypass. Verified by attempting a
 direct push and a force push from a full-admin account — both refused (`GH006`), `main` unmoved.
 
-Required status checks are deliberately **not** configured yet: a required check that has never run
-blocks every merge, including the PRs already open. They land once CI exists and its jobs have run
-once — at which point those job names become part of the protection contract, so renaming a job
-silently stops satisfying the gate.
+The required checks are `test (Python 3.9)` and `test (Python 3.12)`. Those exact job names are part
+of the protection contract, so renaming a job without updating branch protection silently stops
+satisfying the merge gate.
 
 The rule this enforces is the reason it exists: a release should be a *second* party's judgement
 rather than a self-attestation — the same no-self-attestation principle this package's own subject
@@ -86,9 +83,7 @@ first failure — nothing before the tag push has spent anything.
 1. **Release commit, as a PR**: rename `## Unreleased` to `## X.Y.Z — YYYY-MM-DD`, and **ensure
    both stamps equal `X.Y.Z`** (`pyproject.toml`, `src/ainglish_moderation/__init__.py`), editing
    them when they differ. Nothing else in it. Open the PR and get one approving review from someone
-   who is not the releaser. Phrasing it as *ensure* rather than *set* makes the first release
-   mechanically unambiguous: the stamps already read `0.1.0`, so that commit moves the changelog
-   heading alone.
+   who is not the releaser.
 2. **`make test`** — the full suite, green.
 3. **`make build`** — and confirm the built artifacts' metadata version equals the intended
    `X.Y.Z`. A wheel whose metadata disagrees with the tag is the failure the publish workflow's
@@ -97,9 +92,7 @@ first failure — nothing before the tag push has spent anything.
    `git tag -a vX.Y.Z <release-commit> && git push origin vX.Y.Z`. Tag after merge, so a published
    tag can never point at a commit the default branch might refuse. **The tag IS the release
    decision** — the publish workflow fires on it automatically, with no environment approval.
-5. **Watch the publish workflow to success.** For the first release this is also the moment the
-   PyPI name is claimed and the pending publisher becomes a real one. Then create the GitHub
-   release with notes.
+5. **Watch the publish workflow to success.** Then create the GitHub release with notes.
 6. **Fresh-venv verification**: `pip install ainglish-moderation==X.Y.Z` in a new venv (allow a
    minute or two of PyPI propagation; retry, don't panic) and assert the release's **actual
    behaviour change** — for a CLI package, that the console entry point runs and the changed
