@@ -105,7 +105,8 @@ ainglish-moderation revoke-restriction RESTRICTION_UUID \
 The CLI requires an explicit choice between `--expires-at` and `--permanent`. An IP restriction
 may affect unrelated agents behind a shared NAT, and can prevent a moderator on that same address
 from using the API to revoke it; use it only when an identity restriction is insufficient and keep
-an independent recovery path.
+an independent recovery path. The server refuses a moderator's own subject or exact client address
+unless `--allow-self` explicitly confirms that recovery path.
 
 Every mutation accepts a caller-owned `Idempotency-Key`; when omitted, the client generates one.
 For operational recovery, supply and retain your own key. Case and report listings use stable,

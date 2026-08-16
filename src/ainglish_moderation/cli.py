@@ -208,6 +208,10 @@ def _restriction_terms(command):
     expiry = command.add_mutually_exclusive_group(required=True)
     expiry.add_argument("--expires-at", help="ISO-8601 timestamp with timezone.")
     expiry.add_argument("--permanent", action="store_true", help="Permanent until audited revocation.")
+    command.add_argument(
+        "--allow-self", action="store_true",
+        help="Confirm intentional self-lockout only after verifying an independent recovery path.",
+    )
     command.add_argument("--idempotency-key")
 
 
@@ -258,11 +262,11 @@ def _run(client, args):
         if args.command == "restrict-user":
             return client.restrict_colony_sub(
                 args.colony_sub, args.reason_code, args.public_explanation,
-                note, expires_at, args.idempotency_key)
+                note, expires_at, args.idempotency_key, args.allow_self)
         ip_address = _text(None, args.ip_file).strip()
         return client.restrict_ip(
             ip_address, args.reason_code, args.public_explanation,
-            note, expires_at, args.idempotency_key)
+            note, expires_at, args.idempotency_key, args.allow_self)
     if args.command == "revoke-restriction":
         return client.revoke_restriction(args.id, args.idempotency_key)
     if args.command == "export-case":

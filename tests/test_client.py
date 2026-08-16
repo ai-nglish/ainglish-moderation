@@ -290,6 +290,19 @@ class ClientTest(unittest.TestCase):
         self.assertEqual("203.0.113.9", ip["payload"]["subject"]["value"])
         self.assertIsNone(ip["payload"]["expires_at"])
 
+        self_lock = self.client.restrict_colony_sub(
+            "moderator-sub", "compromised_account", "Emergency containment.",
+            expires_at="2026-08-15T12:00:00Z", idempotency_key="self-lock-001",
+            allow_self=True,
+        )
+        self.assertTrue(self_lock["payload"]["allow_self"])
+
+        with self.assertRaises(ValueError):
+            self.client.restrict_ip(
+                "203.0.113.9", "spam", "Invalid confirmation type.",
+                idempotency_key="bad-self-lock-001", allow_self="yes",
+            )
+
         revoked = self.client.revoke_restriction("restriction/id", "revoke-restriction-01")
         self.assertEqual("/api/v1/moderation/restrictions/restriction%2Fid/revoke", revoked["path"])
         self.assertEqual({}, revoked["payload"])

@@ -390,27 +390,33 @@ class ModerationClient(AinglishClient):
             yield from page["restrictions"]
 
     def restrict_colony_sub(self, colony_sub, reason_code, public_explanation,
-                            private_note=None, expires_at=None, idempotency_key=None):
+                            private_note=None, expires_at=None, idempotency_key=None,
+                            allow_self=False):
         """Restrict writes by immutable Colony ``sub``.
 
         ``expires_at`` is an ISO-8601 timestamp with timezone; ``None`` means permanent until an
         audited revocation. A mutable username is intentionally not accepted as the target.
+        ``allow_self=True`` is an emergency confirmation: use it only after proving a second
+        moderator/recovery path can revoke a restriction on this client's own subject.
         """
         return self._restrict(
             "colony_sub", colony_sub, reason_code, public_explanation,
-            private_note, expires_at, idempotency_key,
+            private_note, expires_at, idempotency_key, allow_self,
         )
 
     def restrict_ip(self, ip_address, reason_code, public_explanation,
-                    private_note=None, expires_at=None, idempotency_key=None):
+                    private_note=None, expires_at=None, idempotency_key=None,
+                    allow_self=False):
         """Restrict writes from one exact IPv4/IPv6 address.
 
         The raw address is sent over TLS for canonicalisation and immediately becomes a keyed
         server-side digest. It is not returned or persisted. CIDR/network ranges are refused.
+        ``allow_self=True`` is required if this is the current client address and should be used
+        only after verifying an independent recovery path.
         """
         return self._restrict(
             "ip", ip_address, reason_code, public_explanation,
-            private_note, expires_at, idempotency_key,
+            private_note, expires_at, idempotency_key, allow_self,
         )
 
     def revoke_restriction(self, restriction_id, idempotency_key=None):
@@ -422,7 +428,7 @@ class ModerationClient(AinglishClient):
         )
 
     def _restrict(self, subject_type, subject_value, reason_code, public_explanation,
-                  private_note, expires_at, idempotency_key):
+                  private_note, expires_at, idempotency_key, allow_self):
         _enum("subject_type", subject_type, RESTRICTION_SUBJECT_TYPES)
         _enum("reason_code", reason_code, REASON_CODES)
         if not isinstance(subject_value, str) or not subject_value.strip():
@@ -431,6 +437,8 @@ class ModerationClient(AinglishClient):
             raise ValueError("public_explanation must be a non-empty string")
         if expires_at is not None and not isinstance(expires_at, str):
             raise ValueError("expires_at must be an ISO-8601 string with timezone, or None")
+        if not isinstance(allow_self, bool):
+            raise ValueError("allow_self must be a boolean")
         payload = {
             "subject": {"type": subject_type, "value": subject_value},
             "reason_code": reason_code,
@@ -439,6 +447,8 @@ class ModerationClient(AinglishClient):
         }
         if private_note is not None:
             payload["private_note"] = private_note
+        if allow_self:
+            payload["allow_self"] = True
         return self.post(
             "/api/v1/moderation/restrictions",
             payload,
