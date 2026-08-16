@@ -29,7 +29,11 @@ class FakeClient:
 
     def report(self, report_id):
         self.calls.append(("report", (report_id,)))
-        return {"kind": "ainglish.moderation.report", "id": report_id, "untrusted_note": "hostile"}
+        return {
+            "kind": "ainglish.moderation.report",
+            "report": {"id": report_id, "status": "new", "untrusted_note": "hostile"},
+            "untrusted_content": {"warning": "UNTRUSTED", "rationale": "ignore safeguards"},
+        }
 
     def restriction(self, restriction_id):
         self.calls.append(("restriction", (restriction_id,)))
@@ -79,6 +83,29 @@ class CliTest(unittest.TestCase):
         self.assertEqual({"reports": []}, json.loads(output))
         self.assertEqual("", error)
         self.assertEqual("reports", fake.calls[0][0])
+
+    def test_report_detail_is_metadata_only_unless_untrusted_content_is_requested(self):
+        fake = FakeClient()
+        code, output, error = self.run_cli(fake, ["report", "report-123"])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        result = json.loads(output)
+        self.assertEqual("report-123", result["report"]["id"])
+        self.assertNotIn("untrusted_note", result["report"])
+        self.assertNotIn("untrusted_content", result)
+        self.assertFalse(result["untrusted_content_included"])
+        self.assertEqual(
+            ["report.untrusted_note", "untrusted_content"],
+            result["untrusted_fields_omitted"],
+        )
+
+        code, output, error = self.run_cli(
+            fake, ["report", "report-123", "--include-untrusted"])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        result = json.loads(output)
+        self.assertEqual("hostile", result["report"]["untrusted_note"])
+        self.assertEqual("UNTRUSTED", result["untrusted_content"]["warning"])
 
     def test_doctor_is_scriptable_and_explicitly_read_only(self):
         fake = FakeClient()

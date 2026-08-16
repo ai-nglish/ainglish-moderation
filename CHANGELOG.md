@@ -4,6 +4,8 @@
 
 - Make tag-triggered PyPI publication fully automatic, matching the base SDK, and keep the
   pre-build version check dependency-free so a clean runner can reach the build and publish steps.
+- Keep report inbox and detail triage metadata-only by default; printing reporter prose and target
+  bytes from the CLI now requires an explicit `--include-untrusted` choice.
 
 ## 0.1.0 — 2026-08-15
 
