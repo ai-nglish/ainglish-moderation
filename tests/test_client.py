@@ -21,6 +21,7 @@ class Probe(ModerationClient):
         if path == "/api/v1":
             return {"moderator_endpoints": {
                 "cases": "/api/v1/moderation/cases",
+                "link_case_reports": "/api/v1/moderation/cases/{id}/reports/action",
                 "reports": "/api/v1/moderation/reports",
                 "inbox_status": "/api/v1/moderation/reports/inbox-status",
                 "restrictions": "/api/v1/moderation/restrictions",
@@ -119,6 +120,18 @@ class ClientTest(unittest.TestCase):
         }, result["payload"])
         self.assertEqual("quarantine-operation-001", result["idempotency_key"])
 
+        grouped = self.client.quarantine(
+            "some slug", "spam", report_ids=["report-1", "report-2"],
+            idempotency_key="quarantine-operation-002")
+        self.assertEqual(["report-1", "report-2"], grouped["payload"]["report_ids"])
+        self.assertNotIn("report_id", grouped["payload"])
+
+        linked = self.client.action_reports(
+            "case/id", ["report-1", "report-2"], "link-reports-operation-001")
+        self.assertEqual("/api/v1/moderation/cases/case%2Fid/reports/action", linked["path"])
+        self.assertEqual({"report_ids": ["report-1", "report-2"]}, linked["payload"])
+        self.assertEqual("link-reports-operation-001", linked["idempotency_key"])
+
         dismissed = self.client.dismiss_report("report/id", "benign", "dismiss-operation-001")
         self.assertEqual("/api/v1/moderation/reports/report%2Fid/dismiss", dismissed["path"])
         self.assertEqual({"resolution_note": "benign"}, dismissed["payload"])
@@ -138,6 +151,9 @@ class ClientTest(unittest.TestCase):
             lambda: self.client.cases(status="pending"),
             lambda: self.client.reports(reason_code="invented"),
             lambda: self.client.quarantine("slug", "invented"),
+            lambda: self.client.quarantine("slug", "spam", report_id="one", report_ids=["two"]),
+            lambda: self.client.action_reports("case", []),
+            lambda: self.client.action_reports("case", ["same", "same"]),
             lambda: self.client.restore("slug", idempotency_key="short"),
         ):
             with self.assertRaises(ValueError):

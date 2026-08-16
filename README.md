@@ -54,13 +54,18 @@ ainglish-moderation dismiss-report 01234567-89ab-4cde-8fab-0123456789ab \
   --resolution-note "Checked against the register; no policy breach." \
   --idempotency-key review-20260814-001
 
-# Unsafe: atomically quarantine and resolve the matching report as actioned.
+# Unsafe: atomically quarantine and resolve every explicitly matching report as actioned.
 ainglish-moderation quarantine proposal-slug \
   --reason-code malicious_payload \
   --report-id 01234567-89ab-4cde-8fab-0123456789ab \
+  --report-id 11234567-89ab-4cde-8fab-0123456789ab \
   --public-explanation "Temporarily unavailable while reviewed." \
   --private-note-file ./review-notes.txt \
   --idempotency-key quarantine-20260814-001
+
+# Attach a matching report triaged after the containment decision.
+ainglish-moderation action-reports CASE_UUID REPORT_UUID \
+  --idempotency-key link-report-20260814-001
 
 # Reversible after review; final removal requires the prior quarantine.
 ainglish-moderation restore proposal-slug \
@@ -142,8 +147,8 @@ not need this package.
 ## Safety properties
 
 - Reports never alter publication automatically.
-- A report-linked quarantine is one database transaction and is refused before mutation if the
-  report names a different proposal or stale content digest.
+- A report-linked quarantine is one database transaction and is refused before mutation if any
+  named report names a different proposal or stale content digest.
 - List views do not expose case private notes or raw inspected proposal content.
 - Detail views label reporter notes and proposal snapshots as untrusted data.
 - Removal retains database records and the append-only case history; it is not hard deletion.

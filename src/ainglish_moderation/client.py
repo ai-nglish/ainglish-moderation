@@ -36,6 +36,20 @@ def _enum(name, value, accepted):
     return value
 
 
+def _report_ids(value):
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 20:
+        raise ValueError("report_ids must be a non-empty list of at most 20 report id strings")
+    result = []
+    for report_id in value:
+        if not isinstance(report_id, str) or not report_id.strip():
+            raise ValueError("every report_ids item must be a non-empty string")
+        report_id = report_id.strip()
+        if report_id in result:
+            raise ValueError("report_ids must not contain duplicates")
+        result.append(report_id)
+    return result
+
+
 class ModerationClient(AinglishClient):
     """Ainglish's elevated operations, authenticated through the ordinary Ainglish client.
 
@@ -81,7 +95,8 @@ class ModerationClient(AinglishClient):
 
         def discovery_contract(value):
             endpoints = value.get("moderator_endpoints") if isinstance(value, dict) else None
-            required = {"cases", "reports", "inbox_status", "restrictions", "create_restriction",
+            required = {"cases", "link_case_reports", "reports", "inbox_status",
+                        "restrictions", "create_restriction",
                         "revoke_restriction"}
             if not isinstance(endpoints, dict) or not required.issubset(endpoints):
                 raise ValueError("API discovery is missing moderation operations: %s" %
@@ -282,11 +297,13 @@ class ModerationClient(AinglishClient):
 
     # ------------------------------------------------------------------ publication controls
     def quarantine(self, proposal, reason_code, public_explanation=None, private_note=None,
-                   report_id=None, idempotency_key=None):
+                   report_id=None, idempotency_key=None, report_ids=None):
         """Immediately hide a proposal tree and open its durable case.
 
-        ``report_id`` atomically resolves a matching source report as actioned. The server refuses
-        a report that does not identify these exact current proposal bytes before changing state.
+        ``report_id`` is the backward-compatible single-report input. Prefer ``report_ids`` for
+        an explicit set of up to 20 matching reports; the server validates all of them before
+        changing publication and resolves them atomically. The two arguments are mutually
+        exclusive.
         """
         _enum("reason_code", reason_code, REASON_CODES)
         payload = {"reason_code": reason_code}
@@ -294,11 +311,27 @@ class ModerationClient(AinglishClient):
             payload["public_explanation"] = public_explanation
         if private_note is not None:
             payload["private_note"] = private_note
+        if report_id is not None and report_ids is not None:
+            raise ValueError("use report_id or report_ids, not both")
         if report_id is not None:
             payload["report_id"] = report_id
+        if report_ids is not None:
+            payload["report_ids"] = _report_ids(report_ids)
         return self.post(
             "/api/v1/moderation/proposals/%s/quarantine" % urllib.parse.quote(proposal, safe=""),
             payload,
+            idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def action_reports(self, case_id, report_ids, idempotency_key=None):
+        """Mark an explicit report set actioned by an existing proposal moderation case.
+
+        This is for matching reports triaged after containment. Nothing is selected implicitly;
+        the server validates every target and binds the sorted set to the operation key.
+        """
+        return self.post(
+            "/api/v1/moderation/cases/%s/reports/action" % urllib.parse.quote(case_id, safe=""),
+            {"report_ids": _report_ids(report_ids)},
             idempotency_key=_operation_key(idempotency_key),
         )
 
