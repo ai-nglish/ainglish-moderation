@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-08-15
 
 - Make tag-triggered PyPI publication fully automatic, matching the base SDK, and keep the
   pre-build version check dependency-free so a clean runner can reach the build and publish steps.
