@@ -169,6 +169,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual("", error)
         self.assertFalse(json.loads(output)["attention_required"])
 
+    def test_monitor_inbox_uses_a_distinct_attention_exit(self):
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+                cli, "monitor_inbox", return_value={
+                    "kind": "ainglish.moderation.inbox_transition",
+                    "attention_required": True,
+                    "transition": "initial_attention",
+                    "untrusted_content_included": False,
+                }) as monitor:
+            state_path = os.path.join(directory, "state.json")
+            code, output, error = self.run_cli(fake, [
+                "monitor-inbox", "--state-file", state_path,
+            ])
+        self.assertEqual(4, code)
+        self.assertEqual("", error)
+        self.assertTrue(json.loads(output)["attention_required"])
+        monitor.assert_called_once_with(fake, state_path, None, 15.0)
+
     def test_private_note_file_is_read_locally(self):
         fake = FakeClient()
         with tempfile.TemporaryDirectory() as directory:

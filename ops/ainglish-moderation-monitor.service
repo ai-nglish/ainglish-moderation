@@ -1,0 +1,16 @@
+[Unit]
+Description=Check the Ainglish moderation inbox
+Documentation=https://github.com/ai-nglish/ainglish-moderation/blob/main/RUNBOOK.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/ainglish-moderation/monitor.env
+ExecStart=%h/.local/bin/ainglish-moderation monitor-inbox
+SuccessExitStatus=4
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/ainglish-moderation
+

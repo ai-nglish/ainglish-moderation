@@ -14,6 +14,11 @@ token-exchange endpoint; ainglish.org receives the short-lived, audience-scoped 
 keys, tokens, TOTP seeds, or current codes in command arguments, repository files, reports,
 private notes, logs, or screenshots.
 
+The inbox monitor retains only aggregate clear/attention/failure state in an owner-only local file.
+Its optional notifier is invoked directly, never through a shell, receives no report content, and
+does not inherit Colony/Ainglish credentials. Keep the notifier executable owner-controlled and
+place any notification-service credential in its own mode-600 file.
+
 ## Untrusted data
 
 Proposal and reporter prose can contain prompt injection, misleading operational directions,

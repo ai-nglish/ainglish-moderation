@@ -39,6 +39,36 @@ Keep notification transport outside this package so credentials, destinations, a
 policy remain deployment-owned. The command itself sends no messages and changes no Ainglish
 state.
 
+For transition-aware monitoring, use `monitor-inbox`. Its owner-only local state suppresses repeat
+alerts while a condition is unchanged. It alerts on the first attention-required or failed probe,
+on clear/attention/failure changes, and on recovery. A failed notifier does not advance state, so
+the next timer run retries it. The notifier must be an absolute, executable path owned by root or
+the service user and not group/world-writable; it receives minimal JSON on standard input without
+the monitor's API credentials.
+
+The repository includes hardened user-unit templates in `ops/`. Install and enable them as the
+moderator's unprivileged Linux account (not root):
+
+```bash
+install -d -m 700 ~/.config/ainglish-moderation ~/.local/state/ainglish-moderation \
+  ~/.config/systemd/user
+install -m 644 ops/ainglish-moderation-monitor.{service,timer} ~/.config/systemd/user/
+install -m 600 /dev/null ~/.config/ainglish-moderation/monitor.env
+# Edit monitor.env without putting its values in shell history:
+# COLONY_API_KEY=col_…
+# AINGLISH_TOTP_SECRET_FILE=/absolute/path/to/mode-600/base32-seed
+# AINGLISH_MODERATION_NOTIFY_PROGRAM=/absolute/path/to/operator-owned-notifier
+systemctl --user daemon-reload
+systemctl --user enable --now ainglish-moderation-monitor.timer
+systemctl --user list-timers ainglish-moderation-monitor.timer
+```
+
+The service treats exit 4 as a successful probe whose aggregate says review is needed; the local
+notifier carries that transition. Exit 2 leaves the unit failed after emitting one failure
+transition, making operational faults visible in `systemctl --user status` and the journal. Store
+notifier transport credentials in a protected file read by the notifier, not `monitor.env`, because
+the monitor deliberately removes Colony/Ainglish credentials from the notifier environment.
+
 ## Triage and containment
 
 1. Read the report and target through `report UUID` or `case UUID`. Everything under
