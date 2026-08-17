@@ -4,6 +4,12 @@
 
 - Alert on content-free inbox arrivals and one-, six-, and 24-hour backlog thresholds without
   repeatedly paging an unchanged queue; migrate existing version-one local monitor state safely.
+- Add content-free report grouping, advisory review leases, and atomic bounded bulk dismissal for
+  scalable triage without making reports change publication.
+- Add prose-free contributor-impact inventory before restrictions are considered.
+- Add two-person terminal-action requests: restore, final removal, removed-content reinstatement,
+  and permanent restrictions now require a distinct moderator's confirmation; permanent requests
+  also require case/report provenance.
 - Let restore and final-removal operations retain a private resolution reason, including local
   `--resolution-note-file` handling that keeps longer operational context out of process arguments.
 - Read content-free inbox status from one server aggregate rather than traversing every report page,

@@ -55,8 +55,24 @@ class FakeClient:
         self.calls.append(("reports", args))
         return {"reports": []}
 
+    def report_groups(self, *args):
+        self.calls.append(("report_groups", args))
+        return {"groups": []}
+
     def dismiss_report(self, *args):
         self.calls.append(("dismiss", args))
+        return {"ok": True}
+
+    def dismiss_reports(self, *args):
+        self.calls.append(("dismiss_reports", args))
+        return {"ok": True}
+
+    def claim_report(self, *args):
+        self.calls.append(("claim_report", args))
+        return {"ok": True}
+
+    def release_report_claim(self, *args):
+        self.calls.append(("release_report_claim", args))
         return {"ok": True}
 
     def quarantine(self, *args):
@@ -71,6 +87,10 @@ class FakeClient:
         self.calls.append(("remove", args))
         return {"ok": True}
 
+    def reinstate(self, *args):
+        self.calls.append(("reinstate", args))
+        return {"ok": True}
+
     def action_reports(self, *args):
         self.calls.append(("action_reports", args))
         return {"ok": True}
@@ -78,6 +98,22 @@ class FakeClient:
     def restrictions(self, *args):
         self.calls.append(("restrictions", args))
         return {"restrictions": []}
+
+    def contributor_impact(self, *args):
+        self.calls.append(("contributor_impact", args))
+        return {"kind": "ainglish.moderation.contributor_impact"}
+
+    def approvals(self, *args):
+        self.calls.append(("approvals", args))
+        return {"approvals": []}
+
+    def approval(self, *args):
+        self.calls.append(("approval", args))
+        return {"approval": {"id": args[0]}}
+
+    def confirm_approval(self, *args):
+        self.calls.append(("confirm_approval", args))
+        return {"approval": {"status": "confirmed"}}
 
     def restrict_colony_sub(self, *args):
         self.calls.append(("restrict_colony_sub", args))
@@ -230,6 +266,48 @@ class CliTest(unittest.TestCase):
             "case-1", ["report-1", "report-2"], "later-report-operation",
         ), fake.calls[0][1])
 
+    def test_scalable_triage_commands_are_explicit_and_scriptable(self):
+        fake = FakeClient()
+        cases = (
+            (["report-groups", "--limit", "12"], "report_groups", (12,)),
+            (["claim-report", "report-1", "--lease-seconds", "600",
+              "--idempotency-key", "claim-operation-001"],
+             "claim_report", ("report-1", 600, "claim-operation-001")),
+            (["release-report-claim", "report-1", "--idempotency-key", "release-operation-001"],
+             "release_report_claim", ("report-1", "release-operation-001")),
+            (["dismiss-reports", "report-1", "report-2", "--resolution-note", "same incident",
+              "--idempotency-key", "dismiss-set-operation-001"],
+             "dismiss_reports", (["report-1", "report-2"], "same incident",
+                                 "dismiss-set-operation-001")),
+        )
+        for argv, name, arguments in cases:
+            fake.calls.clear()
+            code, output, error = self.run_cli(fake, argv)
+            self.assertEqual(0, code)
+            self.assertEqual("", error)
+            self.assertTrue(json.loads(output)["ok"] if name != "report_groups" else True)
+            self.assertEqual((name, arguments), fake.calls[0])
+
+    def test_two_person_and_impact_commands_are_scriptable(self):
+        fake = FakeClient()
+        for argv, expected in (
+            (["reinstate", "some-slug", "--resolution-note", "new evidence",
+              "--idempotency-key", "reinstate-operation-001"],
+             ("reinstate", ("some-slug", "reinstate-operation-001", "new evidence"))),
+            (["approvals", "--status", "pending", "--limit", "10"],
+             ("approvals", ("pending", 10))),
+            (["approval", "approval-1"], ("approval", ("approval-1",))),
+            (["confirm-approval", "approval-1", "--idempotency-key", "confirm-operation-001"],
+             ("confirm_approval", ("approval-1", "confirm-operation-001"))),
+            (["contributor-impact", "stable-sub"],
+             ("contributor_impact", ("stable-sub",))),
+        ):
+            fake.calls.clear()
+            code, _, error = self.run_cli(fake, argv)
+            self.assertEqual(0, code)
+            self.assertEqual("", error)
+            self.assertEqual(expected, fake.calls[0])
+
     def test_conflicting_note_sources_fail_without_an_api_call(self):
         fake = FakeClient()
         code, output, error = self.run_cli(fake, [
@@ -290,12 +368,14 @@ class CliTest(unittest.TestCase):
         code, _, error = self.run_cli(fake, [
             "restrict-user", "stable-sub", "--reason-code", "spam",
             "--public-explanation", "Repeated submissions.", "--permanent",
+            "--source-report-id", "report-1",
             "--idempotency-key", "restrict-user-01",
         ])
         self.assertEqual(0, code)
         self.assertEqual("", error)
         self.assertEqual((
             "stable-sub", "spam", "Repeated submissions.", None, None, "restrict-user-01", False,
+            True, None, ["report-1"],
         ), fake.calls[0][1])
 
         fake = FakeClient()
@@ -306,7 +386,8 @@ class CliTest(unittest.TestCase):
         ])
         self.assertEqual(0, code)
         self.assertEqual("", error)
-        self.assertTrue(fake.calls[0][1][-1])
+        self.assertTrue(fake.calls[0][1][6])
+        self.assertFalse(fake.calls[0][1][7])
 
     def test_restrict_ip_reads_sensitive_address_from_file_and_never_prints_it(self):
         fake = FakeClient()

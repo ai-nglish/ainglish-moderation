@@ -10,7 +10,7 @@ import tempfile
 from ainglish.client import AinglishError
 
 from .client import (
-    CASE_STATUSES, REASON_CODES, REPORT_STATUSES, RESTRICTION_STATUSES,
+    APPROVAL_STATUSES, CASE_STATUSES, REASON_CODES, REPORT_STATUSES, RESTRICTION_STATUSES,
     RESTRICTION_SUBJECT_TYPES, ModerationClient,
 )
 from .monitor import default_state_path, monitor_inbox
@@ -128,6 +128,9 @@ def _build_parser():
     reports.add_argument("--reporter-sub")
     reports.add_argument("--limit", type=int, default=50)
     reports.add_argument("--cursor")
+    report_groups = commands.add_parser(
+        "report-groups", help="Group new reports by exact target bytes and reason without prose.")
+    report_groups.add_argument("--limit", type=int, default=50)
     report = commands.add_parser("report", help="Inspect one report and its target bytes.")
     report.add_argument("id")
     report.add_argument(
@@ -140,6 +143,21 @@ def _build_parser():
     dismiss.add_argument("--resolution-note")
     dismiss.add_argument("--resolution-note-file")
     dismiss.add_argument("--idempotency-key")
+    dismiss_many = commands.add_parser(
+        "dismiss-reports", help="Atomically dismiss an explicit report set.")
+    dismiss_many.add_argument("ids", nargs="+")
+    dismiss_many.add_argument("--resolution-note")
+    dismiss_many.add_argument("--resolution-note-file")
+    dismiss_many.add_argument("--idempotency-key")
+    claim = commands.add_parser(
+        "claim-report", help="Claim an advisory review lease; the report stays new.")
+    claim.add_argument("id")
+    claim.add_argument("--lease-seconds", type=int, default=900)
+    claim.add_argument("--idempotency-key")
+    release_claim = commands.add_parser(
+        "release-report-claim", help="Release a review lease without resolving the report.")
+    release_claim.add_argument("id")
+    release_claim.add_argument("--idempotency-key")
 
     quarantine = commands.add_parser("quarantine", help="Immediately hide a proposal tree.")
     quarantine.add_argument("proposal")
@@ -159,8 +177,11 @@ def _build_parser():
     action_reports.add_argument("report_ids", nargs="+")
     action_reports.add_argument("--idempotency-key")
 
-    for name, help_text in (("restore", "Restore a quarantined proposal."),
-                            ("remove", "Mark a quarantined proposal removed.")):
+    for name, help_text in (
+        ("restore", "Request restoration of a quarantined proposal."),
+        ("remove", "Request final removal of a quarantined proposal."),
+        ("reinstate", "Request that removed content return to quarantine."),
+    ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("proposal")
         command.add_argument("--resolution-note")
@@ -174,6 +195,19 @@ def _build_parser():
     restrictions.add_argument("--cursor")
     restriction = commands.add_parser("restriction", help="Inspect one restriction and its audit events.")
     restriction.add_argument("id")
+    impact = commands.add_parser(
+        "contributor-impact", help="Inventory one stable subject's attributable rows without prose.")
+    impact.add_argument("colony_sub")
+
+    approvals = commands.add_parser("approvals", help="List two-person moderation requests.")
+    approvals.add_argument("--status", choices=APPROVAL_STATUSES)
+    approvals.add_argument("--limit", type=int, default=50)
+    approval = commands.add_parser("approval", help="Inspect one content-minimised approval request.")
+    approval.add_argument("id")
+    confirm = commands.add_parser(
+        "confirm-approval", help="Confirm a request as its distinct second moderator.")
+    confirm.add_argument("id")
+    confirm.add_argument("--idempotency-key")
 
     restrict_user = commands.add_parser(
         "restrict-user", help="Restrict writes by immutable Colony subject UUID.")
@@ -212,6 +246,11 @@ def _restriction_terms(command):
         "--allow-self", action="store_true",
         help="Confirm intentional self-lockout only after verifying an independent recovery path.",
     )
+    command.add_argument(
+        "--source-case-id", help="Private evidence provenance; required alone/with reports for --permanent.")
+    command.add_argument(
+        "--source-report-id", action="append", dest="source_report_ids",
+        help="Private evidence provenance; repeat up to 20 times; required alone/with a case for --permanent.")
     command.add_argument("--idempotency-key")
 
 
@@ -231,12 +270,21 @@ def _run(client, args):
     if args.command == "reports":
         return client.reports(
             args.status, args.reason_code, args.proposal, args.reporter_sub, args.limit, args.cursor)
+    if args.command == "report-groups":
+        return client.report_groups(args.limit)
     if args.command == "report":
         result = client.report(args.id)
         return result if args.include_untrusted else _metadata_only_report(result)
     if args.command == "dismiss-report":
         note = _text(args.resolution_note, args.resolution_note_file)
         return client.dismiss_report(args.id, note, args.idempotency_key)
+    if args.command == "dismiss-reports":
+        note = _text(args.resolution_note, args.resolution_note_file)
+        return client.dismiss_reports(args.ids, note, args.idempotency_key)
+    if args.command == "claim-report":
+        return client.claim_report(args.id, args.lease_seconds, args.idempotency_key)
+    if args.command == "release-report-claim":
+        return client.release_report_claim(args.id, args.idempotency_key)
     if args.command == "quarantine":
         note = _text(args.private_note, args.private_note_file)
         legacy_report = args.report_ids[0] if args.report_ids and len(args.report_ids) == 1 else None
@@ -252,21 +300,34 @@ def _run(client, args):
     if args.command == "remove":
         note = _text(args.resolution_note, args.resolution_note_file)
         return client.remove(args.proposal, args.idempotency_key, note)
+    if args.command == "reinstate":
+        note = _text(args.resolution_note, args.resolution_note_file)
+        return client.reinstate(args.proposal, args.idempotency_key, note)
     if args.command == "restrictions":
         return client.restrictions(args.status, args.subject_type, args.limit, args.cursor)
     if args.command == "restriction":
         return client.restriction(args.id)
+    if args.command == "contributor-impact":
+        return client.contributor_impact(args.colony_sub)
+    if args.command == "approvals":
+        return client.approvals(args.status, args.limit)
+    if args.command == "approval":
+        return client.approval(args.id)
+    if args.command == "confirm-approval":
+        return client.confirm_approval(args.id, args.idempotency_key)
     if args.command in ("restrict-user", "restrict-ip"):
         note = _text(args.private_note, args.private_note_file)
         expires_at = None if args.permanent else args.expires_at
         if args.command == "restrict-user":
             return client.restrict_colony_sub(
                 args.colony_sub, args.reason_code, args.public_explanation,
-                note, expires_at, args.idempotency_key, args.allow_self)
+                note, expires_at, args.idempotency_key, args.allow_self, args.permanent,
+                args.source_case_id, args.source_report_ids)
         ip_address = _text(None, args.ip_file).strip()
         return client.restrict_ip(
             ip_address, args.reason_code, args.public_explanation,
-            note, expires_at, args.idempotency_key, args.allow_self)
+            note, expires_at, args.idempotency_key, args.allow_self, args.permanent,
+            args.source_case_id, args.source_report_ids)
     if args.command == "revoke-restriction":
         return client.revoke_restriction(args.id, args.idempotency_key)
     if args.command == "export-case":
