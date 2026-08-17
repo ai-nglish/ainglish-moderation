@@ -196,6 +196,7 @@ class ClientTest(unittest.TestCase):
                     "attention_required": True,
                     "new_reports": 2,
                     "oldest_new_report_at": "2026-08-15T10:00:00+00:00",
+                    "newest_new_report_at": "2026-08-15T11:30:00Z",
                     "oldest_new_report_age_seconds": 7199,
                     "checked_at": "2026-08-15T11:59:59Z",
                     "mutations_performed": 0,
@@ -214,6 +215,7 @@ class ClientTest(unittest.TestCase):
         self.assertTrue(result["attention_required"])
         self.assertEqual(2, result["new_reports"])
         self.assertEqual("2026-08-15T10:00:00Z", result["oldest_new_report_at"])
+        self.assertEqual("2026-08-15T11:30:00Z", result["newest_new_report_at"])
         self.assertEqual(7200, result["oldest_new_report_age_seconds"])
         self.assertEqual(0, result["mutations_performed"])
         self.assertFalse(result["untrusted_content_included"])
@@ -229,6 +231,7 @@ class ClientTest(unittest.TestCase):
         self.assertFalse(result["attention_required"])
         self.assertEqual(0, result["new_reports"])
         self.assertIsNone(result["oldest_new_report_at"])
+        self.assertIsNone(result["newest_new_report_at"])
         self.assertIsNone(result["oldest_new_report_age_seconds"])
 
     def test_inbox_status_fails_closed_on_an_invalid_timestamp(self):
