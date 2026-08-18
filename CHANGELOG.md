@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Alert on content-free inbox arrivals and one-, six-, and 24-hour backlog thresholds without
+  repeatedly paging an unchanged queue; migrate existing version-one local monitor state safely.
 - Let restore and final-removal operations retain a private resolution reason, including local
   `--resolution-note-file` handling that keeps longer operational context out of process arguments.
 - Read content-free inbox status from one server aggregate rather than traversing every report page,

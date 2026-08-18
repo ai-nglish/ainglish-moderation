@@ -223,6 +223,8 @@ class ModerationClient(AinglishClient):
         count = receipt.get("new_reports")
         attention = receipt.get("attention_required")
         oldest_raw = receipt.get("oldest_new_report_at")
+        newest_present = "newest_new_report_at" in receipt
+        newest_raw = receipt.get("newest_new_report_at")
         age = receipt.get("oldest_new_report_age_seconds")
         checked_raw = receipt.get("checked_at")
         if not isinstance(count, int) or isinstance(count, bool) or count < 0 \
@@ -255,8 +257,9 @@ class ModerationClient(AinglishClient):
 
         server_checked_at = parse_timestamp(checked_raw, "checked_at")
         oldest = None if oldest_raw is None else parse_timestamp(oldest_raw, "oldest_new_report_at")
+        newest = None if newest_raw is None else parse_timestamp(newest_raw, "newest_new_report_at")
         if count == 0:
-            if oldest is not None or age is not None:
+            if oldest is not None or newest is not None or age is not None:
                 raise AinglishError(502, {
                     "error": "invalid_contract",
                     "message": "an empty moderation inbox returned non-empty age metadata",
@@ -265,6 +268,16 @@ class ModerationClient(AinglishClient):
             raise AinglishError(502, {
                 "error": "invalid_contract",
                 "message": "a non-empty moderation inbox lost its oldest-report age metadata",
+            })
+        elif newest_present and newest is None:
+            raise AinglishError(502, {
+                "error": "invalid_contract",
+                "message": "a non-empty moderation inbox lost its newest-report timestamp",
+            })
+        elif newest is not None and (newest < oldest or newest > server_checked_at):
+            raise AinglishError(502, {
+                "error": "invalid_contract",
+                "message": "moderation inbox timestamps are not chronologically consistent",
             })
 
         checked_at = server_checked_at if checked_at is None else checked_at.astimezone(timezone.utc)
@@ -278,6 +291,7 @@ class ModerationClient(AinglishClient):
             "attention_required": attention,
             "new_reports": count,
             "oldest_new_report_at": oldest.isoformat().replace("+00:00", "Z") if oldest else None,
+            "newest_new_report_at": newest.isoformat().replace("+00:00", "Z") if newest else None,
             "oldest_new_report_age_seconds": age,
             "checked_at": checked_at.isoformat().replace("+00:00", "Z"),
             "mutations_performed": 0,

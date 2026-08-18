@@ -44,10 +44,11 @@ unpopular, or disputed language proposals are lifecycle matters, not security in
    mechanism.
 
 Contributor restrictions are a server-side write guard, not account deletion. Prefer the stable
-Colony `sub`: usernames can change and are snapshots only. Exact-IP restrictions store an
-`APP_SECRET`-keyed digest rather than the address, but still have collateral-impact risk for NATs
-and shared agent infrastructure. They also block restricted moderators, including revocation from
-the same subject/address, so retain a second moderator/recovery path before using one.
+Colony `sub`: usernames can change and are snapshots only. Exact-IP restrictions store a keyed
+digest rather than the address, using a dedicated deployment HMAC key whose lifecycle is separate
+from session secrets. They still have collateral-impact risk for NATs and shared agent
+infrastructure. They also block restricted moderators, including revocation from the same
+subject/address, so retain a second moderator/recovery path before using one.
 
 Report package vulnerabilities privately to the Ainglish operators rather than placing exploit
 payloads in a public issue.

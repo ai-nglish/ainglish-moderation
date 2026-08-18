@@ -7,7 +7,8 @@ import subprocess
 import tempfile
 
 
-_STATE_VERSION = 1
+_STATE_VERSION = 2
+_AGE_THRESHOLDS = ((24 * 60 * 60, "24h"), (6 * 60 * 60, "6h"), (60 * 60, "1h"))
 _NOTIFIER_ENV_NAMES = ("HOME", "LANG", "LC_ALL", "PATH", "TZ")
 
 
@@ -52,7 +53,7 @@ def _load_state(path):
         if descriptor >= 0:
             os.close(descriptor)
 
-    if not isinstance(state, dict) or state.get("version") != _STATE_VERSION:
+    if not isinstance(state, dict) or state.get("version") not in (1, _STATE_VERSION):
         raise ValueError("monitor state has an unsupported format")
     if state.get("status") not in ("clear", "attention", "failure"):
         raise ValueError("monitor state has an invalid status")
@@ -131,6 +132,43 @@ def _transition(previous_status, status):
     return "attention_required" if status == "attention" else "cleared"
 
 
+def _age_level(age):
+    if not isinstance(age, int) or isinstance(age, bool) or age < 0:
+        return None
+    for seconds, label in _AGE_THRESHOLDS:
+        if age >= seconds:
+            return label
+    return "fresh"
+
+
+def _age_rank(level):
+    return {None: -1, "fresh": 0, "1h": 1, "6h": 2, "24h": 3}.get(level, -1)
+
+
+def _attention_transition(previous, receipt):
+    """Describe one aggregate queue change without turning every poll into a notification."""
+    if previous is None or previous.get("status") != "attention":
+        return None
+    previous_count = previous.get("new_reports")
+    count = receipt.get("new_reports")
+    previous_newest = previous.get("newest_new_report_at")
+    newest = receipt.get("newest_new_report_at")
+    previous_level = previous.get("age_level")
+    if previous_level is None:
+        previous_level = _age_level(previous.get("oldest_new_report_age_seconds"))
+    level = _age_level(receipt.get("oldest_new_report_age_seconds"))
+
+    if (isinstance(previous_count, int) and isinstance(count, int) and count > previous_count) \
+            or (isinstance(newest, str) and isinstance(previous_newest, str)
+                and newest > previous_newest):
+        return "new_reports_arrived"
+    if _age_rank(level) > _age_rank(previous_level):
+        return "age_escalated_%s" % level
+    if isinstance(previous_count, int) and isinstance(count, int) and count < previous_count:
+        return "inbox_count_decreased"
+    return "unchanged"
+
+
 def monitor_inbox(client, state_path, notifier_program=None, notifier_timeout=15.0):
     """Probe once, notify on state transitions, and retain only aggregate local state."""
     if notifier_timeout <= 0:
@@ -162,8 +200,10 @@ def monitor_inbox(client, state_path, notifier_program=None, notifier_timeout=15
 
     status = "attention" if attention else "clear"
     transition = _transition(previous_status, status)
+    if status == "attention" and previous_status == "attention":
+        transition = _attention_transition(previous, receipt)
     changed = transition != "unchanged"
-    notify = changed and transition != "initial_clear"
+    notify = changed and transition not in ("initial_clear", "inbox_count_decreased")
     event = {
         "kind": "ainglish.moderation.inbox_transition",
         "probe_ok": True,
@@ -171,6 +211,7 @@ def monitor_inbox(client, state_path, notifier_program=None, notifier_timeout=15
         "transition": transition,
         "new_reports": receipt.get("new_reports"),
         "oldest_new_report_age_seconds": receipt.get("oldest_new_report_age_seconds"),
+        "newest_new_report_at": receipt.get("newest_new_report_at"),
         "untrusted_content_included": False,
     }
     notified = False
@@ -184,6 +225,8 @@ def monitor_inbox(client, state_path, notifier_program=None, notifier_timeout=15
         "attention_required": attention,
         "new_reports": receipt.get("new_reports"),
         "oldest_new_report_age_seconds": receipt.get("oldest_new_report_age_seconds"),
+        "newest_new_report_at": receipt.get("newest_new_report_at"),
+        "age_level": _age_level(receipt.get("oldest_new_report_age_seconds")),
     })
     return {
         **event,

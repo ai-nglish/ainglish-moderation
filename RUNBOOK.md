@@ -45,10 +45,11 @@ state.
 
 For transition-aware monitoring, use `monitor-inbox`. Its owner-only local state suppresses repeat
 alerts while a condition is unchanged. It alerts on the first attention-required or failed probe,
-on clear/attention/failure changes, and on recovery. A failed notifier does not advance state, so
-the next timer run retries it. The notifier must be an absolute, executable path owned by root or
-the service user and not group/world-writable; it receives minimal JSON on standard input without
-the monitor's API credentials.
+new arrivals (even if another report was resolved and the count stayed level), backlog ages crossing
+one, six and 24 hours, clear/attention/failure changes, and recovery. A mere count decrease does not
+page. A failed notifier does not advance state, so the next timer run retries it. The notifier must
+be an absolute, executable path owned by root or the service user and not group/world-writable; it
+receives minimal JSON on standard input without the monitor's API credentials.
 
 The repository includes hardened user-unit templates in `ops/`. Install and enable them as the
 moderator's unprivileged Linux account (not root):
@@ -102,7 +103,7 @@ requires `--permanent` to be written explicitly when that is genuinely intended.
 
 An exact-IP restriction is secondary emergency containment. Read the raw address from a mode-600
 file, consider NAT/shared-host collateral, and verify the independent recovery path first. The
-server immediately converts the address to an APP_SECRET-keyed digest and never stores or returns
+server immediately converts the address to a dedicated deployment-keyed HMAC digest and never stores or returns
 the raw value. CIDR ranges are deliberately unsupported.
 
 Revocation releases writes but retains the restriction and append-only events. Expiry releases

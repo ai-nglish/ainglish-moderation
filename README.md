@@ -117,10 +117,11 @@ oldest age, and explicit zero-mutation/content-omission receipts. It never retri
 reporter prose. Exit status 0 means the inbox is clear, 4 means review is needed, and 2 means the
 check itself failed; see the runbook for a timer example.
 
-`monitor-inbox` adds local transition tracking: the first non-empty result and later changes
-between clear, attention-required, and probe-failed states invoke an optional operator-owned
-notifier exactly once. The notifier receives only content-free JSON on standard input and does not
-inherit Colony/Ainglish credentials. No report row or prose is fetched, printed, or persisted.
+`monitor-inbox` adds local transition tracking. It alerts on the first non-empty result, later report
+arrivals (including a same-count replacement), backlog ages crossing one, six and 24 hours,
+clear/attention/failure changes, and recovery. Count decreases do not page unless the inbox clears.
+The notifier receives only content-free JSON on standard input and does not inherit Colony/Ainglish
+credentials. No report row or prose is fetched, printed, or persisted.
 
 ## Python
 
