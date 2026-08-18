@@ -18,6 +18,7 @@ CASE_STATUSES = ("open", "resolved")
 REPORT_STATUSES = ("new", "dismissed", "actioned")
 RESTRICTION_STATUSES = ("active", "expired", "revoked")
 RESTRICTION_SUBJECT_TYPES = ("colony_sub", "ip")
+APPROVAL_STATUSES = ("pending", "confirmed", "expired")
 USER_AGENT = "ainglish-moderation-python/%s" % __version__
 
 
@@ -95,9 +96,12 @@ class ModerationClient(AinglishClient):
 
         def discovery_contract(value):
             endpoints = value.get("moderator_endpoints") if isinstance(value, dict) else None
-            required = {"cases", "link_case_reports", "reports", "inbox_status",
-                        "restrictions", "create_restriction",
-                        "revoke_restriction"}
+            required = {"cases", "link_case_reports", "reports", "report_groups",
+                        "inbox_status", "bulk_dismiss_reports", "claim_report",
+                        "release_report_claim", "quarantine_proposal", "restore_proposal",
+                        "remove_proposal", "reinstate_proposal", "approvals",
+                        "confirm_approval", "restrictions", "create_restriction",
+                        "revoke_restriction", "contributor_impact"}
             if not isinstance(endpoints, dict) or not required.issubset(endpoints):
                 raise ValueError("API discovery is missing moderation operations: %s" %
                                  ", ".join(sorted(required - set(endpoints or {}))))
@@ -112,12 +116,22 @@ class ModerationClient(AinglishClient):
                 return {"kind": kind, "reachable": True}
             return validate
 
+        def approval_contract(value):
+            if not isinstance(value, dict) \
+                    or value.get("kind") != "ainglish.moderation.approvals" \
+                    or not isinstance(value.get("approvals"), list):
+                raise ValueError("approvals endpoint returned an unexpected envelope")
+            return {"kind": value["kind"], "reachable": True}
+
         probe("identity", self.me, identity_contract)
         probe("discovery", lambda: self.get("/api/v1"), discovery_contract)
         probe("cases", lambda: self.cases(limit=1),
               envelope_contract("ainglish.moderation.cases", "cases"))
         probe("reports", lambda: self.reports(limit=1),
               envelope_contract("ainglish.moderation.reports", "reports"))
+        probe("report_groups", lambda: self.report_groups(limit=1),
+              envelope_contract("ainglish.moderation.report_groups", "groups"))
+        probe("approvals", lambda: self.approvals(limit=1), approval_contract)
         probe("restrictions", lambda: self.restrictions(limit=1),
               envelope_contract("ainglish.moderation.restrictions", "restrictions"))
 
@@ -182,6 +196,12 @@ class ModerationClient(AinglishClient):
     def report(self, report_id):
         """One explicit detail read with untrusted reporter prose and fenced target bytes."""
         return self.get("/api/v1/moderation/reports/%s" % urllib.parse.quote(report_id, safe=""), auth=True)
+
+    def report_groups(self, limit=50):
+        """Content-free oldest-first groups of new reports sharing exact target bytes/reason."""
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer from 1 to 100")
+        return self.get("/api/v1/moderation/reports/groups", params={"limit": limit}, auth=True)
 
     def report_pages(self, status=None, reason_code=None, proposal=None, reporter_sub=None,
                      page_size=100):
@@ -309,6 +329,35 @@ class ModerationClient(AinglishClient):
             idempotency_key=_operation_key(idempotency_key),
         )
 
+    def dismiss_reports(self, report_ids, resolution_note=None, idempotency_key=None):
+        """Atomically dismiss an explicit set; one invalid/stale member changes none."""
+        payload = {"report_ids": _report_ids(report_ids)}
+        if resolution_note is not None:
+            payload["resolution_note"] = resolution_note
+        return self.post(
+            "/api/v1/moderation/reports/dismiss", payload,
+            idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def claim_report(self, report_id, lease_seconds=900, idempotency_key=None):
+        """Claim an advisory review lease; the report remains new and unresolved."""
+        if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool) \
+                or not 60 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be an integer from 60 to 3600")
+        return self.post(
+            "/api/v1/moderation/reports/%s/claim"
+            % urllib.parse.quote(report_id, safe=""),
+            {"lease_seconds": lease_seconds}, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def release_report_claim(self, report_id, idempotency_key=None):
+        """Release an advisory review lease without resolving the report."""
+        return self.post(
+            "/api/v1/moderation/reports/%s/release-claim"
+            % urllib.parse.quote(report_id, safe=""),
+            {}, idempotency_key=_operation_key(idempotency_key),
+        )
+
     # ------------------------------------------------------------------ publication controls
     def quarantine(self, proposal, reason_code, public_explanation=None, private_note=None,
                    report_id=None, idempotency_key=None, report_ids=None):
@@ -350,7 +399,7 @@ class ModerationClient(AinglishClient):
         )
 
     def restore(self, proposal, idempotency_key=None, resolution_note=None):
-        """Restore a quarantined proposal and retain an optional private decision reason."""
+        """Request restoration; publication changes only after distinct confirmation."""
         payload = {}
         if resolution_note is not None:
             payload["resolution_note"] = resolution_note
@@ -360,13 +409,59 @@ class ModerationClient(AinglishClient):
         )
 
     def remove(self, proposal, idempotency_key=None, resolution_note=None):
-        """Remove a quarantined proposal and retain an optional private decision reason."""
+        """Request final removal; publication changes only after distinct confirmation."""
         payload = {}
         if resolution_note is not None:
             payload["resolution_note"] = resolution_note
         return self.post(
             "/api/v1/moderation/proposals/%s/remove" % urllib.parse.quote(proposal, safe=""),
             payload, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def reinstate(self, proposal, idempotency_key=None, resolution_note=None):
+        """Request removed content return to quarantine; this can never republish directly."""
+        payload = {}
+        if resolution_note is not None:
+            payload["resolution_note"] = resolution_note
+        return self.post(
+            "/api/v1/moderation/proposals/%s/reinstate"
+            % urllib.parse.quote(proposal, safe=""),
+            payload, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    # ------------------------------------------------------------------ terminal approvals
+    def approvals(self, status=None, limit=50):
+        """Recent content-minimised two-person requests; private payloads are omitted."""
+        _enum("status", status, APPROVAL_STATUSES)
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer from 1 to 100")
+        params = {"limit": limit}
+        if status is not None:
+            params["status"] = status
+        return self.get("/api/v1/moderation/approvals", params=params, auth=True)
+
+    def approval(self, approval_id):
+        """One content-minimised two-person request; inspect its case/reports separately."""
+        return self.get(
+            "/api/v1/moderation/approvals/%s" % urllib.parse.quote(approval_id, safe=""),
+            auth=True,
+        )
+
+    def confirm_approval(self, approval_id, idempotency_key=None):
+        """Confirm as a moderator distinct from the requester and perform the action atomically."""
+        return self.post(
+            "/api/v1/moderation/approvals/%s/confirm"
+            % urllib.parse.quote(approval_id, safe=""),
+            {}, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def contributor_impact(self, colony_sub):
+        """Bounded, prose-free inventory of rows attributable to one immutable Colony sub."""
+        if not isinstance(colony_sub, str) or not colony_sub.strip() or len(colony_sub) > 191:
+            raise ValueError("colony_sub must be a non-empty string of at most 191 characters")
+        return self.get(
+            "/api/v1/moderation/contributors/%s/impact"
+            % urllib.parse.quote(colony_sub.strip(), safe=""), auth=True,
         )
 
     # ------------------------------------------------------------------ contributor restrictions
@@ -405,22 +500,27 @@ class ModerationClient(AinglishClient):
 
     def restrict_colony_sub(self, colony_sub, reason_code, public_explanation,
                             private_note=None, expires_at=None, idempotency_key=None,
-                            allow_self=False):
+                            allow_self=False, permanent=False, source_case_id=None,
+                            source_report_ids=None):
         """Restrict writes by immutable Colony ``sub``.
 
-        ``expires_at`` is an ISO-8601 timestamp with timezone; ``None`` means permanent until an
-        audited revocation. A mutable username is intentionally not accepted as the target.
+        ``expires_at`` creates an immediate temporary restriction. ``permanent=True`` instead
+        creates a two-person request and requires a source case and/or source reports. Temporary
+        restrictions may also retain this private provenance when supplied.
+        A mutable username is intentionally not accepted as the target.
         ``allow_self=True`` is an emergency confirmation: use it only after proving a second
         moderator/recovery path can revoke a restriction on this client's own subject.
         """
         return self._restrict(
             "colony_sub", colony_sub, reason_code, public_explanation,
-            private_note, expires_at, idempotency_key, allow_self,
+            private_note, expires_at, idempotency_key, allow_self, permanent,
+            source_case_id, source_report_ids,
         )
 
     def restrict_ip(self, ip_address, reason_code, public_explanation,
                     private_note=None, expires_at=None, idempotency_key=None,
-                    allow_self=False):
+                    allow_self=False, permanent=False, source_case_id=None,
+                    source_report_ids=None):
         """Restrict writes from one exact IPv4/IPv6 address.
 
         The raw address is sent over TLS for canonicalisation and immediately becomes a keyed
@@ -430,7 +530,8 @@ class ModerationClient(AinglishClient):
         """
         return self._restrict(
             "ip", ip_address, reason_code, public_explanation,
-            private_note, expires_at, idempotency_key, allow_self,
+            private_note, expires_at, idempotency_key, allow_self, permanent,
+            source_case_id, source_report_ids,
         )
 
     def revoke_restriction(self, restriction_id, idempotency_key=None):
@@ -442,7 +543,8 @@ class ModerationClient(AinglishClient):
         )
 
     def _restrict(self, subject_type, subject_value, reason_code, public_explanation,
-                  private_note, expires_at, idempotency_key, allow_self):
+                  private_note, expires_at, idempotency_key, allow_self, permanent,
+                  source_case_id, source_report_ids):
         _enum("subject_type", subject_type, RESTRICTION_SUBJECT_TYPES)
         _enum("reason_code", reason_code, REASON_CODES)
         if not isinstance(subject_value, str) or not subject_value.strip():
@@ -453,12 +555,31 @@ class ModerationClient(AinglishClient):
             raise ValueError("expires_at must be an ISO-8601 string with timezone, or None")
         if not isinstance(allow_self, bool):
             raise ValueError("allow_self must be a boolean")
+        if not isinstance(permanent, bool):
+            raise ValueError("permanent must be a boolean")
+        if permanent and expires_at is not None:
+            raise ValueError("choose expires_at for temporary containment or permanent=True, not both")
+        if not permanent and expires_at is None:
+            raise ValueError("expires_at is required unless permanent=True")
+        if source_case_id is not None and (not isinstance(source_case_id, str)
+                                           or not source_case_id.strip()):
+            raise ValueError("source_case_id must be a non-empty string")
+        sources = None if source_report_ids is None else _report_ids(source_report_ids)
+        if permanent and source_case_id is None and sources is None:
+            raise ValueError("permanent restrictions require source_case_id and/or source_report_ids")
         payload = {
             "subject": {"type": subject_type, "value": subject_value},
             "reason_code": reason_code,
             "public_explanation": public_explanation,
-            "expires_at": expires_at,
         }
+        if permanent:
+            payload["permanent"] = True
+        else:
+            payload["expires_at"] = expires_at
+        if source_case_id is not None:
+            payload["source_case_id"] = source_case_id.strip()
+        if sources is not None:
+            payload["source_report_ids"] = sources
         if private_note is not None:
             payload["private_note"] = private_note
         if allow_self:

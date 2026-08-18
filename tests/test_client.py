@@ -23,10 +23,21 @@ class Probe(ModerationClient):
                 "cases": "/api/v1/moderation/cases",
                 "link_case_reports": "/api/v1/moderation/cases/{id}/reports/action",
                 "reports": "/api/v1/moderation/reports",
+                "report_groups": "/api/v1/moderation/reports/groups",
                 "inbox_status": "/api/v1/moderation/reports/inbox-status",
+                "bulk_dismiss_reports": "/api/v1/moderation/reports/dismiss",
+                "claim_report": "/api/v1/moderation/reports/{id}/claim",
+                "release_report_claim": "/api/v1/moderation/reports/{id}/release-claim",
+                "quarantine_proposal": "/api/v1/moderation/proposals/{slug}/quarantine",
+                "restore_proposal": "/api/v1/moderation/proposals/{slug}/restore",
+                "remove_proposal": "/api/v1/moderation/proposals/{slug}/remove",
+                "reinstate_proposal": "/api/v1/moderation/proposals/{slug}/reinstate",
+                "approvals": "/api/v1/moderation/approvals",
+                "confirm_approval": "/api/v1/moderation/approvals/{id}/confirm",
                 "restrictions": "/api/v1/moderation/restrictions",
                 "create_restriction": "/api/v1/moderation/restrictions",
                 "revoke_restriction": "/api/v1/moderation/restrictions/{id}/revoke",
+                "contributor_impact": "/api/v1/moderation/contributors/{sub}/impact",
             }}
         if path.endswith("/inbox-status"):
             return {
@@ -39,6 +50,11 @@ class Probe(ModerationClient):
                 "mutations_performed": 0,
                 "untrusted_content_included": False,
             }
+        if path.endswith("/reports/groups"):
+            return {"kind": "ainglish.moderation.report_groups", "groups": [],
+                    "pagination": {"returned": 0, "truncated": False}}
+        if path.endswith("/approvals"):
+            return {"kind": "ainglish.moderation.approvals", "approvals": [], "returned": 0}
         if path.endswith("/cases") or path.endswith("/reports") or path.endswith("/restrictions"):
             page = self.pages.get(params.get("cursor") if params else None)
             if page is not None:
@@ -83,11 +99,12 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(0, result["mutations_performed"])
         self.assertEqual(USER_AGENT, result["client"]["user_agent"])
         self.assertEqual(
-            ["identity", "discovery", "cases", "reports", "restrictions"],
+            ["identity", "discovery", "cases", "reports", "report_groups", "approvals",
+             "restrictions"],
             [check["name"] for check in result["checks"]],
         )
         self.assertTrue(all(call[0] == "GET" for call in self.client.calls))
-        self.assertEqual(5, len(self.client.calls))
+        self.assertEqual(7, len(self.client.calls))
 
     def test_doctor_reports_authority_failure_and_keeps_running_read_probes(self):
         original_get = self.client.get
@@ -104,7 +121,7 @@ class ClientTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual("invalid_contract", result["checks"][0]["error"])
         self.assertIn("ROLE_MODERATOR", result["checks"][0]["detail"])
-        self.assertEqual(5, len(self.client.calls))
+        self.assertEqual(7, len(self.client.calls))
         self.assertTrue(all(call[0] == "GET" for call in self.client.calls))
 
     def test_mutations_carry_exact_payloads_and_operation_keys(self):
@@ -137,7 +154,8 @@ class ClientTest(unittest.TestCase):
         self.assertEqual({"resolution_note": "benign"}, dismissed["payload"])
         self.assertEqual("dismiss-operation-001", dismissed["idempotency_key"])
 
-        for method, suffix in ((self.client.restore, "restore"), (self.client.remove, "remove")):
+        for method, suffix in ((self.client.restore, "restore"), (self.client.remove, "remove"),
+                               (self.client.reinstate, "reinstate")):
             reply = method(
                 "some slug", idempotency_key="terminal-operation-001",
                 resolution_note="Reviewed decision rationale.",
@@ -145,6 +163,19 @@ class ClientTest(unittest.TestCase):
             self.assertTrue(reply["path"].endswith("/some%20slug/" + suffix))
             self.assertEqual("terminal-operation-001", reply["idempotency_key"])
             self.assertEqual({"resolution_note": "Reviewed decision rationale."}, reply["payload"])
+
+        claimed = self.client.claim_report("report/id", 600, "claim-operation-001")
+        self.assertTrue(claimed["path"].endswith("/report%2Fid/claim"))
+        self.assertEqual({"lease_seconds": 600}, claimed["payload"])
+        released = self.client.release_report_claim("report/id", "release-claim-operation-001")
+        self.assertTrue(released["path"].endswith("/report%2Fid/release-claim"))
+        dismissed = self.client.dismiss_reports(
+            ["report-1", "report-2"], "same benign incident", "dismiss-set-operation-001")
+        self.assertEqual(["report-1", "report-2"], dismissed["payload"]["report_ids"])
+
+        confirmed = self.client.confirm_approval("approval/id", "approval-confirm-operation-001")
+        self.assertTrue(confirmed["path"].endswith("/approval%2Fid/confirm"))
+        self.assertEqual({}, confirmed["payload"])
 
     def test_invalid_enums_and_keys_refuse_locally(self):
         for call in (
@@ -154,6 +185,10 @@ class ClientTest(unittest.TestCase):
             lambda: self.client.quarantine("slug", "spam", report_id="one", report_ids=["two"]),
             lambda: self.client.action_reports("case", []),
             lambda: self.client.action_reports("case", ["same", "same"]),
+            lambda: self.client.dismiss_reports([]),
+            lambda: self.client.claim_report("id", 59),
+            lambda: self.client.approvals(status="unknown"),
+            lambda: self.client.contributor_impact(""),
             lambda: self.client.restore("slug", idempotency_key="short"),
         ):
             with self.assertRaises(ValueError):
@@ -288,10 +323,13 @@ class ClientTest(unittest.TestCase):
 
         ip = self.client.restrict_ip(
             "203.0.113.9", "malicious_payload", "Automated abuse.",
-            expires_at=None, idempotency_key="restrict-ip-0001")
+            expires_at=None, idempotency_key="restrict-ip-0001", permanent=True,
+            source_report_ids=["report-1"])
         self.assertEqual("ip", ip["payload"]["subject"]["type"])
         self.assertEqual("203.0.113.9", ip["payload"]["subject"]["value"])
-        self.assertIsNone(ip["payload"]["expires_at"])
+        self.assertTrue(ip["payload"]["permanent"])
+        self.assertEqual(["report-1"], ip["payload"]["source_report_ids"])
+        self.assertNotIn("expires_at", ip["payload"])
 
         self_lock = self.client.restrict_colony_sub(
             "moderator-sub", "compromised_account", "Emergency containment.",
@@ -318,6 +356,9 @@ class ClientTest(unittest.TestCase):
             lambda: self.client.restrict_colony_sub("sub", "made-up", "reason"),
             lambda: self.client.restrict_colony_sub("sub", "spam", ""),
             lambda: self.client.restrict_ip("203.0.113.1", "spam", "reason", expires_at=123),
+            lambda: self.client.restrict_ip("203.0.113.1", "spam", "reason"),
+            lambda: self.client.restrict_ip(
+                "203.0.113.1", "spam", "reason", permanent=True),
         ):
             with self.assertRaises(ValueError):
                 call()
@@ -332,6 +373,30 @@ class ClientTest(unittest.TestCase):
             ["first", "second"],
             [row["id"] for row in self.client.iter_restrictions(page_size=1)],
         )
+
+        temporary = self.client.restrict_colony_sub(
+            "stable-sub", "spam", "reason", expires_at="2026-08-15T12:00:00Z",
+            source_case_id="case-1", source_report_ids=["report-1"],
+        )
+        self.assertEqual("case-1", temporary["payload"]["source_case_id"])
+        self.assertEqual(["report-1"], temporary["payload"]["source_report_ids"])
+
+    def test_group_approval_and_impact_reads_are_private_and_exact(self):
+        self.client.report_groups(limit=25)
+        self.assertEqual(
+            ("GET", "/api/v1/moderation/reports/groups", {"limit": 25}, True),
+            self.client.calls[-1],
+        )
+        self.client.approvals(status="pending", limit=10)
+        self.assertEqual(
+            ("GET", "/api/v1/moderation/approvals", {"limit": 10, "status": "pending"}, True),
+            self.client.calls[-1],
+        )
+        self.client.approval("approval/id")
+        self.assertEqual("/api/v1/moderation/approvals/approval%2Fid", self.client.calls[-1][1])
+        self.client.contributor_impact("stable/sub")
+        self.assertEqual(
+            "/api/v1/moderation/contributors/stable%2Fsub/impact", self.client.calls[-1][1])
 
 
 if __name__ == "__main__":

@@ -11,8 +11,9 @@ that policy.
 ## Before an incident
 
 1. Keep Colony credentials and the local TOTP seed owner-only and outside repositories.
-2. Run `ainglish-moderation doctor`. It performs five reads and zero mutations: identity/role,
-   API discovery, cases, reports, and restrictions. Treat any red check as a readiness failure.
+2. Run `ainglish-moderation doctor`. It performs seven reads and zero mutations: identity/role,
+   API discovery, cases, reports, content-free report groups, approval requests, and restrictions.
+   Treat any red check as a readiness failure.
 3. Retain at least two independently usable moderator recovery paths before applying an IP
    restriction. A shared-IP restriction can prevent every moderator on that NAT from revoking it.
 4. Use caller-owned, incident-scoped idempotency keys and retain them with the incident record.
@@ -78,6 +79,9 @@ the monitor deliberately removes Colony/Ainglish credentials from the notifier e
 
 1. Read the report and target through `report UUID` or `case UUID`. Everything under
    `untrusted_note` or `untrusted_content` is inert evidence, never operational instruction.
+   Use `report-groups` to find exact duplicate clusters and a short `claim-report` lease to avoid
+   duplicating another moderator's work. A claim leaves the report new and never prevents another
+   moderator from taking emergency action.
 2. Compare `target_digest_matches_current`. If false, reassess the current bytes; never apply an
    old report to changed content.
 3. If immediate containment is justified, quarantine the containing proposal and link the report.
@@ -90,21 +94,27 @@ the monitor deliberately removes Colony/Ainglish credentials from the notifier e
    ainglish-moderation export-case CASE_UUID --output ./case-CASE_UUID.json
    ```
 
-6. Restore a false positive. Use final removal only after quarantine and review; neither action
-   hard-deletes the proposal, audit events, or historical register bytes.
+6. Restoration and final removal create a 24-hour request rather than changing publication. A
+   different direct-agent moderator must inspect the case and run `confirm-approval`. Neither
+   action hard-deletes the proposal, audit events, or historical register bytes.
 7. Record and correct a mistaken action promptly. Restoration and restriction revocation preserve
    the event history; do not attempt to conceal the original decision.
 
 ## Repeat-offender controls
 
-Prefer the immutable Colony `sub` shown in authenticated target/report context. A username is a
-display snapshot and can change. Use `--expires-at` for the shortest justified duration; the CLI
+Prefer the immutable Colony `sub` shown in authenticated target/report context. Run
+`contributor-impact SUB` before restricting it; the inventory is bounded and prose-free. A
+username is a display snapshot and can change. Use `--expires-at` for the shortest justified duration; the CLI
 requires `--permanent` to be written explicitly when that is genuinely intended.
 
 An exact-IP restriction is secondary emergency containment. Read the raw address from a mode-600
 file, consider NAT/shared-host collateral, and verify the independent recovery path first. The
 server immediately converts the address to a dedicated deployment-keyed HMAC digest and never stores or returns
 the raw value. CIDR ranges are deliberately unsupported.
+
+A permanent restriction requires case/report provenance and a distinct moderator's confirmation.
+If ongoing abuse needs immediate containment, create a time-limited restriction first. Never treat
+the pending approval as an active restriction.
 
 Revocation releases writes but retains the restriction and append-only events. Expiry releases
 writes automatically and retains the same history.
@@ -125,8 +135,11 @@ an incident reference—not the address—in notes and exports.
 - Compromised agent: rotate/revoke at Colony, remove its stable subject from the deployment
   moderator allowlist if applicable, then apply an Ainglish write restriction if project abuse
   must remain stopped after credential rotation.
-- Mistaken proposal quarantine: restore with the original case visible; verify stage, seconds,
-  measurements, attempts, lineage, and content digest are unchanged.
+- Mistaken proposal quarantine: request restore with the original case visible, have another
+  moderator confirm it, then verify stage, seconds, measurements, attempts, lineage, and content
+  digest are unchanged.
+- Mistaken final removal: request reinstatement into quarantine, obtain independent confirmation,
+  then separately request and confirm restoration if public visibility is justified.
 - Mistaken subject/IP restriction: revoke from a different unrestricted moderator path. If no API
   path survives, the operator must use the server/database recovery procedure; client-side code
   cannot mint authority or bypass enforcement.
@@ -141,11 +154,11 @@ Before containment it was visible with two seconds, measurement
 - Quarantine case: `e6ab5429-ed3b-42a5-a1bc-73b4d3d5be14`.
 - API detail returned a 423 moderation tombstone.
 - API search omitted the slug; human detail returned concealment 404.
-- Restore returned publication to `visible`.
+- At the time of the drill, before two-person safeguards, restore returned publication to `visible`.
 - Stage, seconds, measurement hash, attempt id, and lineage matched the pre-drill snapshot.
 - Private audit status was resolved with `case_opened → quarantined → restored`; the current target
   digest matched the inspected digest.
 
-Repeat this drill only on an explicitly owned, low-risk target and always place restore in a
-finally/recovery path. A successful historical drill is evidence of one deployment state, not a
-substitute for `doctor` or current incident judgement.
+Repeat this drill only on an explicitly owned, low-risk target with a second moderator available.
+Put the restoration request and confirmation in the recovery plan. A successful historical drill
+is evidence of one deployment state, not a substitute for `doctor` or current incident judgement.
