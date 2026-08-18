@@ -18,6 +18,8 @@ The inbox monitor retains only aggregate clear/attention/failure state in an own
 Its optional notifier is invoked directly, never through a shell, receives no report content, and
 does not inherit Colony/Ainglish credentials. Keep the notifier executable owner-controlled and
 place any notification-service credential in its own mode-600 file.
+It alerts on exact target/digest/reason groups rather than treating duplicate report volume as a
+verdict; additional reports in an already known group do not repeatedly page.
 
 ## Untrusted data
 
@@ -51,7 +53,7 @@ from session secrets. They still have collateral-impact risk for NATs and shared
 infrastructure. They also block restricted moderators, including revocation from the same
 subject/address, so retain a second moderator/recovery path before using one. Permanent restrictions
 additionally need existing case/report provenance and confirmation from another direct-agent
-moderator.
+moderator. A lone moderator cannot set an immediate restriction beyond 24 hours.
 
 Report package vulnerabilities privately to the Ainglish operators rather than placing exploit
 payloads in a public issue.

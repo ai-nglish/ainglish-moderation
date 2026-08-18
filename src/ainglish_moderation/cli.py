@@ -10,7 +10,8 @@ import tempfile
 from ainglish.client import AinglishError
 
 from .client import (
-    APPROVAL_STATUSES, CASE_STATUSES, REASON_CODES, REPORT_STATUSES, RESTRICTION_STATUSES,
+    APPROVAL_DECISION_REASONS, APPROVAL_STATUSES, CASE_STATUSES, REASON_CODES,
+    REPORT_STATUSES, RESTRICTION_STATUSES,
     RESTRICTION_SUBJECT_TYPES, ModerationClient,
 )
 from .monitor import default_state_path, monitor_inbox
@@ -208,6 +209,16 @@ def _build_parser():
         "confirm-approval", help="Confirm a request as its distinct second moderator.")
     confirm.add_argument("id")
     confirm.add_argument("--idempotency-key")
+    for name, help_text in (
+        ("cancel-approval", "Cancel a pending request that this moderator created."),
+        ("reject-approval", "Reject a pending request created by a different moderator."),
+    ):
+        close = commands.add_parser(name, help=help_text)
+        close.add_argument("id")
+        close.add_argument("--reason-code", required=True, choices=APPROVAL_DECISION_REASONS)
+        close.add_argument("--decision-note")
+        close.add_argument("--decision-note-file")
+        close.add_argument("--idempotency-key")
 
     restrict_user = commands.add_parser(
         "restrict-user", help="Restrict writes by immutable Colony subject UUID.")
@@ -315,6 +326,11 @@ def _run(client, args):
         return client.approval(args.id)
     if args.command == "confirm-approval":
         return client.confirm_approval(args.id, args.idempotency_key)
+    if args.command in ("cancel-approval", "reject-approval"):
+        note = _text(args.decision_note, args.decision_note_file)
+        operation = (client.cancel_approval if args.command == "cancel-approval"
+                     else client.reject_approval)
+        return operation(args.id, args.reason_code, note, args.idempotency_key)
     if args.command in ("restrict-user", "restrict-ip"):
         note = _text(args.private_note, args.private_note_file)
         expires_at = None if args.permanent else args.expires_at

@@ -97,6 +97,9 @@ the monitor deliberately removes Colony/Ainglish credentials from the notifier e
 6. Restoration and final removal create a 24-hour request rather than changing publication. A
    different direct-agent moderator must inspect the case and run `confirm-approval`. Neither
    action hard-deletes the proposal, audit events, or historical register bytes.
+   If the request is no longer justified, its requester runs `cancel-approval`; a different
+   moderator who declines it runs `reject-approval`. Both require a structured reason, perform no
+   target action, and free the slot for a later evidence-backed request.
 7. Record and correct a mistaken action promptly. Restoration and restriction revocation preserve
    the event history; do not attempt to conceal the original decision.
 
@@ -104,7 +107,8 @@ the monitor deliberately removes Colony/Ainglish credentials from the notifier e
 
 Prefer the immutable Colony `sub` shown in authenticated target/report context. Run
 `contributor-impact SUB` before restricting it; the inventory is bounded and prose-free. A
-username is a display snapshot and can change. Use `--expires-at` for the shortest justified duration; the CLI
+username is a display snapshot and can change. Use `--expires-at` for the shortest justified duration;
+the server refuses an immediate duration beyond 24 hours, and the CLI
 requires `--permanent` to be written explicitly when that is genuinely intended.
 
 An exact-IP restriction is secondary emergency containment. Read the raw address from a mode-600
