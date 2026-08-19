@@ -40,7 +40,8 @@ Choose the first sufficient response:
    should not return. A distinct moderator must confirm it. Removal preserves the database record
    and audit history; it is not erasure.
 5. **Temporarily restrict writes by stable Colony subject.** Use for repeated or ongoing abuse
-   that cannot be contained by acting on one proposal. Prefer the shortest practical expiry.
+   that cannot be contained by acting on one proposal. Prefer the shortest practical expiry; one
+   moderator may set at most 24 hours.
 6. **Permanently restrict a stable subject.** Reserve for sustained serious abuse, repeated
    evasion, or cases where a temporary restriction cannot reasonably protect the project. Cite an
    existing case/report and obtain confirmation from a distinct moderator.
@@ -51,6 +52,8 @@ Choose the first sufficient response:
 Quarantine and temporary restrictions remain immediate so security or legal risk can be contained.
 Restoration, final removal, reinstatement of removed content, and permanent restrictions expire
 unperformed unless a distinct moderator confirms the request within 24 hours.
+The requester may cancel an obsolete pending request, and a different moderator may reject one;
+neither decision performs the requested action. Report count is never an automatic decision rule.
 
 ## Evidence and reasons
 
@@ -110,4 +113,4 @@ Policy or tooling failures should be reported to the project operators without p
 payloads in public issues. This policy should be reviewed after every material incident and before
 expanding moderator powers.
 
-Last reviewed: 2026-08-16.
+Last reviewed: 2026-08-18.

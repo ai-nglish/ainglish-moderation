@@ -29,6 +29,8 @@ class FakeClient:
             "kind": "ainglish.moderation.inbox_status",
             "attention_required": True,
             "new_reports": 2,
+            "new_report_groups": 1,
+            "duplicate_reports": 1,
             "oldest_new_report_at": "2026-08-15T10:00:00Z",
             "oldest_new_report_age_seconds": 7200,
             "mutations_performed": 0,
@@ -114,6 +116,14 @@ class FakeClient:
     def confirm_approval(self, *args):
         self.calls.append(("confirm_approval", args))
         return {"approval": {"status": "confirmed"}}
+
+    def cancel_approval(self, *args):
+        self.calls.append(("cancel_approval", args))
+        return {"approval": {"status": "cancelled"}}
+
+    def reject_approval(self, *args):
+        self.calls.append(("reject_approval", args))
+        return {"approval": {"status": "rejected"}}
 
     def restrict_colony_sub(self, *args):
         self.calls.append(("restrict_colony_sub", args))
@@ -299,6 +309,14 @@ class CliTest(unittest.TestCase):
             (["approval", "approval-1"], ("approval", ("approval-1",))),
             (["confirm-approval", "approval-1", "--idempotency-key", "confirm-operation-001"],
              ("confirm_approval", ("approval-1", "confirm-operation-001"))),
+            (["cancel-approval", "approval-1", "--reason-code", "no_longer_needed",
+              "--decision-note", "superseded", "--idempotency-key", "cancel-operation-001"],
+             ("cancel_approval", ("approval-1", "no_longer_needed", "superseded",
+                                  "cancel-operation-001"))),
+            (["reject-approval", "approval-1", "--reason-code", "insufficient_evidence",
+              "--idempotency-key", "reject-operation-001"],
+             ("reject_approval", ("approval-1", "insufficient_evidence", None,
+                                  "reject-operation-001"))),
             (["contributor-impact", "stable-sub"],
              ("contributor_impact", ("stable-sub",))),
         ):

@@ -18,7 +18,10 @@ CASE_STATUSES = ("open", "resolved")
 REPORT_STATUSES = ("new", "dismissed", "actioned")
 RESTRICTION_STATUSES = ("active", "expired", "revoked")
 RESTRICTION_SUBJECT_TYPES = ("colony_sub", "ip")
-APPROVAL_STATUSES = ("pending", "confirmed", "expired")
+APPROVAL_STATUSES = ("pending", "confirmed", "cancelled", "rejected", "expired")
+APPROVAL_DECISION_REASONS = (
+    "no_longer_needed", "target_changed", "insufficient_evidence", "unsafe_request", "other",
+)
 USER_AGENT = "ainglish-moderation-python/%s" % __version__
 
 
@@ -100,7 +103,8 @@ class ModerationClient(AinglishClient):
                         "inbox_status", "bulk_dismiss_reports", "claim_report",
                         "release_report_claim", "quarantine_proposal", "restore_proposal",
                         "remove_proposal", "reinstate_proposal", "approvals",
-                        "confirm_approval", "restrictions", "create_restriction",
+                        "confirm_approval", "cancel_approval", "reject_approval",
+                        "restrictions", "create_restriction",
                         "revoke_restriction", "contributor_impact"}
             if not isinstance(endpoints, dict) or not required.issubset(endpoints):
                 raise ValueError("API discovery is missing moderation operations: %s" %
@@ -241,13 +245,24 @@ class ModerationClient(AinglishClient):
                 "message": "moderation inbox status returned an unexpected envelope",
             })
         count = receipt.get("new_reports")
+        groups_present = "new_report_groups" in receipt
+        duplicates_present = "duplicate_reports" in receipt
+        groups = receipt.get("new_report_groups", count)
+        duplicates = receipt.get("duplicate_reports", count - groups if isinstance(count, int)
+                                 and isinstance(groups, int) else None)
         attention = receipt.get("attention_required")
         oldest_raw = receipt.get("oldest_new_report_at")
         newest_present = "newest_new_report_at" in receipt
         newest_raw = receipt.get("newest_new_report_at")
+        newest_group_present = "newest_new_report_group_at" in receipt
+        newest_group_raw = receipt.get("newest_new_report_group_at", newest_raw)
         age = receipt.get("oldest_new_report_age_seconds")
         checked_raw = receipt.get("checked_at")
-        if not isinstance(count, int) or isinstance(count, bool) or count < 0 \
+        if groups_present != duplicates_present or groups_present != newest_group_present \
+                or not isinstance(count, int) or isinstance(count, bool) or count < 0 \
+                or not isinstance(groups, int) or isinstance(groups, bool) or not 0 <= groups <= count \
+                or not isinstance(duplicates, int) or isinstance(duplicates, bool) \
+                or duplicates != count - groups \
                 or not isinstance(attention, bool) or attention != (count > 0) \
                 or receipt.get("mutations_performed") != 0 \
                 or receipt.get("untrusted_content_included") is not False:
@@ -278,8 +293,11 @@ class ModerationClient(AinglishClient):
         server_checked_at = parse_timestamp(checked_raw, "checked_at")
         oldest = None if oldest_raw is None else parse_timestamp(oldest_raw, "oldest_new_report_at")
         newest = None if newest_raw is None else parse_timestamp(newest_raw, "newest_new_report_at")
+        newest_group = None if newest_group_raw is None else parse_timestamp(
+            newest_group_raw, "newest_new_report_group_at")
         if count == 0:
-            if oldest is not None or newest is not None or age is not None:
+            if oldest is not None or newest is not None or newest_group is not None or age is not None \
+                    or groups != 0 or duplicates != 0:
                 raise AinglishError(502, {
                     "error": "invalid_contract",
                     "message": "an empty moderation inbox returned non-empty age metadata",
@@ -294,10 +312,20 @@ class ModerationClient(AinglishClient):
                 "error": "invalid_contract",
                 "message": "a non-empty moderation inbox lost its newest-report timestamp",
             })
+        elif newest_group_present and (not newest_present or newest_group is None):
+            raise AinglishError(502, {
+                "error": "invalid_contract",
+                "message": "a non-empty moderation inbox lost its newest-group timestamp",
+            })
         elif newest is not None and (newest < oldest or newest > server_checked_at):
             raise AinglishError(502, {
                 "error": "invalid_contract",
                 "message": "moderation inbox timestamps are not chronologically consistent",
+            })
+        elif newest_group is not None and (newest_group < oldest or newest_group > newest):
+            raise AinglishError(502, {
+                "error": "invalid_contract",
+                "message": "moderation inbox group timestamps are not chronologically consistent",
             })
 
         checked_at = server_checked_at if checked_at is None else checked_at.astimezone(timezone.utc)
@@ -310,8 +338,12 @@ class ModerationClient(AinglishClient):
             "kind": "ainglish.moderation.inbox_status",
             "attention_required": attention,
             "new_reports": count,
+            "new_report_groups": groups,
+            "duplicate_reports": duplicates,
             "oldest_new_report_at": oldest.isoformat().replace("+00:00", "Z") if oldest else None,
             "newest_new_report_at": newest.isoformat().replace("+00:00", "Z") if newest else None,
+            "newest_new_report_group_at": (
+                newest_group.isoformat().replace("+00:00", "Z") if newest_group else None),
             "oldest_new_report_age_seconds": age,
             "checked_at": checked_at.isoformat().replace("+00:00", "Z"),
             "mutations_performed": 0,
@@ -453,6 +485,32 @@ class ModerationClient(AinglishClient):
             "/api/v1/moderation/approvals/%s/confirm"
             % urllib.parse.quote(approval_id, safe=""),
             {}, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def cancel_approval(self, approval_id, reason_code, decision_note=None, idempotency_key=None):
+        """Cancel one's own pending request without performing its target action."""
+        return self._close_approval(
+            approval_id, "cancel", reason_code, decision_note, idempotency_key)
+
+    def reject_approval(self, approval_id, reason_code, decision_note=None, idempotency_key=None):
+        """Reject another moderator's pending request without performing its target action."""
+        return self._close_approval(
+            approval_id, "reject", reason_code, decision_note, idempotency_key)
+
+    def _close_approval(self, approval_id, action, reason_code, decision_note, idempotency_key):
+        if not isinstance(reason_code, str):
+            raise ValueError("reason_code is required")
+        _enum("reason_code", reason_code, APPROVAL_DECISION_REASONS)
+        if decision_note is not None and (not isinstance(decision_note, str)
+                                          or len(decision_note) > 20000):
+            raise ValueError("decision_note must be a string of at most 20000 characters")
+        payload = {"reason_code": reason_code}
+        if decision_note is not None:
+            payload["decision_note"] = decision_note
+        return self.post(
+            "/api/v1/moderation/approvals/%s/%s"
+            % (urllib.parse.quote(approval_id, safe=""), action),
+            payload, idempotency_key=_operation_key(idempotency_key),
         )
 
     def contributor_impact(self, colony_sub):

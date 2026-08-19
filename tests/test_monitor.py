@@ -8,13 +8,18 @@ from unittest import mock
 from ainglish_moderation.monitor import monitor_inbox
 
 
-def _receipt(attention, count=0, age=None, newest=None):
+def _receipt(attention, count=0, groups=None, age=None, newest=None, newest_group=None):
+    groups = count if groups is None else groups
     return {
         "kind": "ainglish.moderation.inbox_status",
         "attention_required": attention,
         "new_reports": count,
+        "new_report_groups": groups,
+        "duplicate_reports": count - groups,
         "oldest_new_report_age_seconds": (120 if age is None else age) if attention else None,
         "newest_new_report_at": newest if attention else None,
+        "newest_new_report_group_at": (
+            (newest if newest_group is None else newest_group) if attention else None),
         "untrusted_note": "never forward or persist this",
         "untrusted_content_included": False,
         "mutations_performed": 0,
@@ -76,21 +81,26 @@ class MonitorTest(unittest.TestCase):
                 True, 2, newest="2026-08-17T10:00:00Z")]), state_path, notifier)
             arrival = monitor_inbox(FakeClient([_receipt(
                 True, 3, newest="2026-08-17T10:05:00Z")]), state_path, notifier)
+            duplicate = monitor_inbox(FakeClient([_receipt(
+                True, 4, groups=3, newest="2026-08-17T10:06:00Z",
+                newest_group="2026-08-17T10:05:00Z")]), state_path, notifier)
             decreased = monitor_inbox(FakeClient([_receipt(
                 True, 2, newest="2026-08-17T10:05:00Z")]), state_path, notifier)
             cleared = monitor_inbox(FakeClient([_receipt(False)]), state_path, notifier)
 
             self.assertEqual("initial_attention", first["transition"])
             self.assertTrue(first["notified"])
-            self.assertEqual("new_reports_arrived", arrival["transition"])
+            self.assertEqual("new_report_groups_arrived", arrival["transition"])
             self.assertTrue(arrival["notified"])
+            self.assertEqual("duplicate_reports_arrived", duplicate["transition"])
+            self.assertFalse(duplicate["notified"])
             self.assertEqual("inbox_count_decreased", decreased["transition"])
             self.assertFalse(decreased["notified"])
             self.assertEqual("cleared", cleared["transition"])
             self.assertTrue(cleared["notified"])
             emitted = self._events(events)
             self.assertEqual(
-                ["initial_attention", "new_reports_arrived", "cleared"],
+                ["initial_attention", "new_report_groups_arrived", "cleared"],
                 [e["transition"] for e in emitted],
             )
             self.assertTrue(all(e["untrusted_content_included"] is False for e in emitted))
@@ -116,12 +126,30 @@ class MonitorTest(unittest.TestCase):
 
             self.assertEqual("age_escalated_1h", age_one["transition"])
             self.assertEqual("unchanged", unchanged["transition"])
-            self.assertEqual("new_reports_arrived", same_count_arrival["transition"])
+            self.assertEqual("new_report_groups_arrived", same_count_arrival["transition"])
             self.assertEqual("age_escalated_6h", age_six["transition"])
             self.assertEqual("age_escalated_24h", age_day["transition"])
             self.assertEqual(
-                ["initial_attention", "age_escalated_1h", "new_reports_arrived",
+                ["initial_attention", "age_escalated_1h", "new_report_groups_arrived",
                  "age_escalated_6h", "age_escalated_24h"],
+                [event["transition"] for event in self._events(events)],
+            )
+
+    def test_duplicate_arrival_does_not_suppress_an_age_escalation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = os.path.join(directory, "state.json")
+            notifier, events = self._notifier(directory)
+            monitor_inbox(FakeClient([_receipt(
+                True, 2, groups=1, age=3500, newest="2026-08-17T10:00:00Z",
+                newest_group="2026-08-17T09:00:00Z")]), state_path, notifier)
+            result = monitor_inbox(FakeClient([_receipt(
+                True, 3, groups=1, age=3700, newest="2026-08-17T10:05:00Z",
+                newest_group="2026-08-17T09:00:00Z")]), state_path, notifier)
+
+            self.assertEqual("age_escalated_1h", result["transition"])
+            self.assertTrue(result["notified"])
+            self.assertEqual(
+                ["initial_attention", "age_escalated_1h"],
                 [event["transition"] for event in self._events(events)],
             )
 
@@ -137,7 +165,7 @@ class MonitorTest(unittest.TestCase):
 
             self.assertEqual("unchanged", result["transition"])
             with open(state_path, "r", encoding="utf-8") as handle:
-                self.assertEqual(2, json.load(handle)["version"])
+                self.assertEqual(3, json.load(handle)["version"])
 
     def test_probe_failure_and_recovery_each_notify_once_without_error_text(self):
         with tempfile.TemporaryDirectory() as directory:

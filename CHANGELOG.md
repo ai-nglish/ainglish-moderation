@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Make unattended alerting group-first: matching report-brigade duplicates update aggregate state
+  without paging, while a newly first-seen exact target/digest/reason group still alerts.
+- Add retry-safe approval cancellation by the requester and rejection by a different moderator,
+  with structured reasons and private decision-note file support.
+
 - Alert on content-free inbox arrivals and one-, six-, and 24-hour backlog thresholds without
   repeatedly paging an unchanged queue; migrate existing version-one local monitor state safely.
 - Add content-free report grouping, advisory review leases, and atomic bounded bulk dismissal for

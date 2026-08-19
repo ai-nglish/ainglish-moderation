@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 
 
-_STATE_VERSION = 2
+_STATE_VERSION = 3
 _AGE_THRESHOLDS = ((24 * 60 * 60, "24h"), (6 * 60 * 60, "6h"), (60 * 60, "1h"))
 _NOTIFIER_ENV_NAMES = ("HOME", "LANG", "LC_ALL", "PATH", "TZ")
 
@@ -53,7 +53,7 @@ def _load_state(path):
         if descriptor >= 0:
             os.close(descriptor)
 
-    if not isinstance(state, dict) or state.get("version") not in (1, _STATE_VERSION):
+    if not isinstance(state, dict) or state.get("version") not in (1, 2, _STATE_VERSION):
         raise ValueError("monitor state has an unsupported format")
     if state.get("status") not in ("clear", "attention", "failure"):
         raise ValueError("monitor state has an invalid status")
@@ -151,19 +151,26 @@ def _attention_transition(previous, receipt):
         return None
     previous_count = previous.get("new_reports")
     count = receipt.get("new_reports")
-    previous_newest = previous.get("newest_new_report_at")
-    newest = receipt.get("newest_new_report_at")
+    previous_groups = previous.get("new_report_groups", previous_count)
+    groups = receipt.get("new_report_groups", count)
+    previous_newest_group = previous.get(
+        "newest_new_report_group_at", previous.get("newest_new_report_at"))
+    newest_group = receipt.get(
+        "newest_new_report_group_at", receipt.get("newest_new_report_at"))
     previous_level = previous.get("age_level")
     if previous_level is None:
         previous_level = _age_level(previous.get("oldest_new_report_age_seconds"))
     level = _age_level(receipt.get("oldest_new_report_age_seconds"))
 
-    if (isinstance(previous_count, int) and isinstance(count, int) and count > previous_count) \
-            or (isinstance(newest, str) and isinstance(previous_newest, str)
-                and newest > previous_newest):
-        return "new_reports_arrived"
+    if (isinstance(previous_groups, int) and isinstance(groups, int)
+            and groups > previous_groups) or (
+            isinstance(newest_group, str) and isinstance(previous_newest_group, str)
+            and newest_group > previous_newest_group):
+        return "new_report_groups_arrived"
     if _age_rank(level) > _age_rank(previous_level):
         return "age_escalated_%s" % level
+    if isinstance(previous_count, int) and isinstance(count, int) and count > previous_count:
+        return "duplicate_reports_arrived"
     if isinstance(previous_count, int) and isinstance(count, int) and count < previous_count:
         return "inbox_count_decreased"
     return "unchanged"
@@ -203,15 +210,19 @@ def monitor_inbox(client, state_path, notifier_program=None, notifier_timeout=15
     if status == "attention" and previous_status == "attention":
         transition = _attention_transition(previous, receipt)
     changed = transition != "unchanged"
-    notify = changed and transition not in ("initial_clear", "inbox_count_decreased")
+    notify = changed and transition not in (
+        "initial_clear", "inbox_count_decreased", "duplicate_reports_arrived")
     event = {
         "kind": "ainglish.moderation.inbox_transition",
         "probe_ok": True,
         "attention_required": attention,
         "transition": transition,
         "new_reports": receipt.get("new_reports"),
+        "new_report_groups": receipt.get("new_report_groups"),
+        "duplicate_reports": receipt.get("duplicate_reports"),
         "oldest_new_report_age_seconds": receipt.get("oldest_new_report_age_seconds"),
         "newest_new_report_at": receipt.get("newest_new_report_at"),
+        "newest_new_report_group_at": receipt.get("newest_new_report_group_at"),
         "untrusted_content_included": False,
     }
     notified = False
@@ -224,8 +235,11 @@ def monitor_inbox(client, state_path, notifier_program=None, notifier_timeout=15
         "status": status,
         "attention_required": attention,
         "new_reports": receipt.get("new_reports"),
+        "new_report_groups": receipt.get("new_report_groups"),
+        "duplicate_reports": receipt.get("duplicate_reports"),
         "oldest_new_report_age_seconds": receipt.get("oldest_new_report_age_seconds"),
         "newest_new_report_at": receipt.get("newest_new_report_at"),
+        "newest_new_report_group_at": receipt.get("newest_new_report_group_at"),
         "age_level": _age_level(receipt.get("oldest_new_report_age_seconds")),
     })
     return {

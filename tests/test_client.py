@@ -34,6 +34,8 @@ class Probe(ModerationClient):
                 "reinstate_proposal": "/api/v1/moderation/proposals/{slug}/reinstate",
                 "approvals": "/api/v1/moderation/approvals",
                 "confirm_approval": "/api/v1/moderation/approvals/{id}/confirm",
+                "cancel_approval": "/api/v1/moderation/approvals/{id}/cancel",
+                "reject_approval": "/api/v1/moderation/approvals/{id}/reject",
                 "restrictions": "/api/v1/moderation/restrictions",
                 "create_restriction": "/api/v1/moderation/restrictions",
                 "revoke_restriction": "/api/v1/moderation/restrictions/{id}/revoke",
@@ -44,7 +46,11 @@ class Probe(ModerationClient):
                 "kind": "ainglish.moderation.inbox_status",
                 "attention_required": False,
                 "new_reports": 0,
+                "new_report_groups": 0,
+                "duplicate_reports": 0,
                 "oldest_new_report_at": None,
+                "newest_new_report_at": None,
+                "newest_new_report_group_at": None,
                 "oldest_new_report_age_seconds": None,
                 "checked_at": "2026-08-15T12:00:00Z",
                 "mutations_performed": 0,
@@ -176,6 +182,15 @@ class ClientTest(unittest.TestCase):
         confirmed = self.client.confirm_approval("approval/id", "approval-confirm-operation-001")
         self.assertTrue(confirmed["path"].endswith("/approval%2Fid/confirm"))
         self.assertEqual({}, confirmed["payload"])
+        cancelled = self.client.cancel_approval(
+            "approval/id", "no_longer_needed", "private", "approval-cancel-operation-001")
+        self.assertTrue(cancelled["path"].endswith("/approval%2Fid/cancel"))
+        self.assertEqual({
+            "reason_code": "no_longer_needed", "decision_note": "private",
+        }, cancelled["payload"])
+        rejected = self.client.reject_approval(
+            "approval/id", "insufficient_evidence", idempotency_key="approval-reject-operation-001")
+        self.assertTrue(rejected["path"].endswith("/approval%2Fid/reject"))
 
     def test_invalid_enums_and_keys_refuse_locally(self):
         for call in (
@@ -188,6 +203,8 @@ class ClientTest(unittest.TestCase):
             lambda: self.client.dismiss_reports([]),
             lambda: self.client.claim_report("id", 59),
             lambda: self.client.approvals(status="unknown"),
+            lambda: self.client.cancel_approval("id", "invented"),
+            lambda: self.client.reject_approval("id", None),
             lambda: self.client.contributor_impact(""),
             lambda: self.client.restore("slug", idempotency_key="short"),
         ):
@@ -230,8 +247,11 @@ class ClientTest(unittest.TestCase):
                     "kind": "ainglish.moderation.inbox_status",
                     "attention_required": True,
                     "new_reports": 2,
+                    "new_report_groups": 1,
+                    "duplicate_reports": 1,
                     "oldest_new_report_at": "2026-08-15T10:00:00+00:00",
                     "newest_new_report_at": "2026-08-15T11:30:00Z",
+                    "newest_new_report_group_at": "2026-08-15T11:00:00Z",
                     "oldest_new_report_age_seconds": 7199,
                     "checked_at": "2026-08-15T11:59:59Z",
                     "mutations_performed": 0,
@@ -249,8 +269,11 @@ class ClientTest(unittest.TestCase):
         self.assertEqual("ainglish.moderation.inbox_status", result["kind"])
         self.assertTrue(result["attention_required"])
         self.assertEqual(2, result["new_reports"])
+        self.assertEqual(1, result["new_report_groups"])
+        self.assertEqual(1, result["duplicate_reports"])
         self.assertEqual("2026-08-15T10:00:00Z", result["oldest_new_report_at"])
         self.assertEqual("2026-08-15T11:30:00Z", result["newest_new_report_at"])
+        self.assertEqual("2026-08-15T11:00:00Z", result["newest_new_report_group_at"])
         self.assertEqual(7200, result["oldest_new_report_age_seconds"])
         self.assertEqual(0, result["mutations_performed"])
         self.assertFalse(result["untrusted_content_included"])
@@ -265,6 +288,8 @@ class ClientTest(unittest.TestCase):
 
         self.assertFalse(result["attention_required"])
         self.assertEqual(0, result["new_reports"])
+        self.assertEqual(0, result["new_report_groups"])
+        self.assertEqual(0, result["duplicate_reports"])
         self.assertIsNone(result["oldest_new_report_at"])
         self.assertIsNone(result["newest_new_report_at"])
         self.assertIsNone(result["oldest_new_report_age_seconds"])
