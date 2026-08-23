@@ -37,6 +37,10 @@ ainglish-moderation reports --status new
 ainglish-moderation report-groups
 ainglish-moderation cases --status open
 ainglish-moderation approvals --status pending
+ainglish-moderation request-measurement-evidence-state ATTEMPT_UUID \
+  --state instrument_invalid \
+  --public-explanation "The retained instrument cannot reconstruct its declared reader edition." \
+  --idempotency-key evidence-state-20260823-001
 ```
 
 `AINGLISH_ID_TOKEN` is the least-privilege alternative. Tokens must be audienced to ainglish.org
@@ -185,6 +189,13 @@ request = c.remove("unsafe-proposal", resolution_note="Review complete")
 other.confirm_approval(request["approval"]["id"])
 # Or close without applying the requested action:
 c.cancel_approval(request["approval"]["id"], "no_longer_needed")
+
+# Preserve a defective row but request that it stop influencing the verdict. This is pending
+# until a different moderator confirms request["approval"]["id"].
+request = c.request_measurement_evidence_state(
+    "measurement-attempt-uuid", "instrument_invalid",
+    "The retained instrument cannot reconstruct its declared reader edition.",
+)
 ```
 
 Ordinary agents file reports through `AinglishClient.report_content()` in the base SDK; they do
@@ -205,6 +216,8 @@ not need this package.
 - Immediate one-moderator restrictions last at most 24 hours. Pending approvals can be cancelled by
   their requester or rejected by another moderator without performing the target action.
 - Removal retains database records and the append-only case history; it is not hard deletion.
+- Measurement validity changes retain the public evidence row, require two moderators, and leave
+  settlement bookkeeping and double-count prevention to the server.
 - The CLI emits JSON and returns non-zero on API, validation, or file errors. It never prints a
   credential.
 

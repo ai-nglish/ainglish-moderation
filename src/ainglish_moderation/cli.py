@@ -10,7 +10,8 @@ import tempfile
 from ainglish.client import AinglishError
 
 from .client import (
-    APPROVAL_DECISION_REASONS, APPROVAL_STATUSES, CASE_STATUSES, REASON_CODES,
+    APPROVAL_DECISION_REASONS, APPROVAL_STATUSES, CASE_STATUSES, MEASUREMENT_EVIDENCE_STATES,
+    REASON_CODES,
     REPORT_STATUSES, RESTRICTION_STATUSES,
     RESTRICTION_SUBJECT_TYPES, ModerationClient,
 )
@@ -189,6 +190,21 @@ def _build_parser():
         command.add_argument("--resolution-note-file")
         command.add_argument("--idempotency-key")
 
+    evidence_state = commands.add_parser(
+        "request-measurement-evidence-state",
+        help="Request an audit-preserving measurement evidence annotation.",
+    )
+    evidence_state.add_argument("attempt_id")
+    evidence_state.add_argument("--state", required=True, choices=MEASUREMENT_EVIDENCE_STATES)
+    evidence_state.add_argument("--public-explanation", required=True)
+    evidence_state.add_argument("--private-note")
+    evidence_state.add_argument("--private-note-file")
+    evidence_state.add_argument(
+        "--source-report-id", action="append", dest="source_report_ids",
+        help="Private provenance report targeting this measurement; repeat up to 20 times.",
+    )
+    evidence_state.add_argument("--idempotency-key")
+
     restrictions = commands.add_parser("restrictions", help="List contributor write restrictions.")
     restrictions.add_argument("--status", choices=RESTRICTION_STATUSES)
     restrictions.add_argument("--subject-type", choices=RESTRICTION_SUBJECT_TYPES)
@@ -314,6 +330,12 @@ def _run(client, args):
     if args.command == "reinstate":
         note = _text(args.resolution_note, args.resolution_note_file)
         return client.reinstate(args.proposal, args.idempotency_key, note)
+    if args.command == "request-measurement-evidence-state":
+        note = _text(args.private_note, args.private_note_file)
+        return client.request_measurement_evidence_state(
+            args.attempt_id, args.state, args.public_explanation, note,
+            args.source_report_ids, args.idempotency_key,
+        )
     if args.command == "restrictions":
         return client.restrictions(args.status, args.subject_type, args.limit, args.cursor)
     if args.command == "restriction":

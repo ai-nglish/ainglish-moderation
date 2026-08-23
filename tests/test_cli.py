@@ -93,6 +93,10 @@ class FakeClient:
         self.calls.append(("reinstate", args))
         return {"ok": True}
 
+    def request_measurement_evidence_state(self, *args):
+        self.calls.append(("request_measurement_evidence_state", args))
+        return {"approval": {"status": "pending"}, "evidence_changed": False}
+
     def action_reports(self, *args):
         self.calls.append(("action_reports", args))
         return {"ok": True}
@@ -319,6 +323,12 @@ class CliTest(unittest.TestCase):
                                   "reject-operation-001"))),
             (["contributor-impact", "stable-sub"],
              ("contributor_impact", ("stable-sub",))),
+            (["request-measurement-evidence-state", "attempt-1", "--state", "record_only",
+              "--public-explanation", "Useful record, but not a settlement voice.",
+              "--source-report-id", "report-1", "--idempotency-key", "evidence-operation-001"],
+             ("request_measurement_evidence_state", (
+                 "attempt-1", "record_only", "Useful record, but not a settlement voice.",
+                 None, ["report-1"], "evidence-operation-001"))),
         ):
             fake.calls.clear()
             code, _, error = self.run_cli(fake, argv)

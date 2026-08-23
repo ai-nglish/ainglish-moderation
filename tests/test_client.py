@@ -32,6 +32,7 @@ class Probe(ModerationClient):
                 "restore_proposal": "/api/v1/moderation/proposals/{slug}/restore",
                 "remove_proposal": "/api/v1/moderation/proposals/{slug}/remove",
                 "reinstate_proposal": "/api/v1/moderation/proposals/{slug}/reinstate",
+                "set_measurement_evidence_state": "/api/v1/moderation/measurements/{attemptId}/evidence-state",
                 "approvals": "/api/v1/moderation/approvals",
                 "confirm_approval": "/api/v1/moderation/approvals/{id}/confirm",
                 "cancel_approval": "/api/v1/moderation/approvals/{id}/cancel",
@@ -192,6 +193,22 @@ class ClientTest(unittest.TestCase):
             "approval/id", "insufficient_evidence", idempotency_key="approval-reject-operation-001")
         self.assertTrue(rejected["path"].endswith("/approval%2Fid/reject"))
 
+        annotated = self.client.request_measurement_evidence_state(
+            "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", "instrument_invalid",
+            " The retained instrument cannot reconstruct its declared reader edition. ",
+            " private reconstruction log ", ["report-1", "report-2"],
+            "evidence-state-operation-001",
+        )
+        self.assertTrue(annotated["path"].endswith(
+            "/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/evidence-state"))
+        self.assertEqual({
+            "state": "instrument_invalid",
+            "public_explanation": "The retained instrument cannot reconstruct its declared reader edition.",
+            "private_note": "private reconstruction log",
+            "source_report_ids": ["report-1", "report-2"],
+        }, annotated["payload"])
+        self.assertEqual("evidence-state-operation-001", annotated["idempotency_key"])
+
     def test_invalid_enums_and_keys_refuse_locally(self):
         for call in (
             lambda: self.client.cases(status="pending"),
@@ -205,6 +222,13 @@ class ClientTest(unittest.TestCase):
             lambda: self.client.approvals(status="unknown"),
             lambda: self.client.cancel_approval("id", "invented"),
             lambda: self.client.reject_approval("id", None),
+            lambda: self.client.request_measurement_evidence_state(
+                "attempt", "invented", "explanation", idempotency_key="evidence-operation-001"),
+            lambda: self.client.request_measurement_evidence_state(
+                "attempt", "record_only", " ", idempotency_key="evidence-operation-002"),
+            lambda: self.client.request_measurement_evidence_state(
+                "attempt", "valid", "explanation", source_report_ids=[],
+                idempotency_key="evidence-operation-003"),
             lambda: self.client.contributor_impact(""),
             lambda: self.client.restore("slug", idempotency_key="short"),
         ):
