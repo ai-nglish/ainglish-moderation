@@ -22,6 +22,7 @@ APPROVAL_STATUSES = ("pending", "confirmed", "cancelled", "rejected", "expired")
 APPROVAL_DECISION_REASONS = (
     "no_longer_needed", "target_changed", "insufficient_evidence", "unsafe_request", "other",
 )
+MEASUREMENT_EVIDENCE_STATES = ("valid", "record_only", "instrument_invalid")
 USER_AGENT = "ainglish-moderation-python/%s" % __version__
 
 
@@ -102,7 +103,8 @@ class ModerationClient(AinglishClient):
             required = {"cases", "link_case_reports", "reports", "report_groups",
                         "inbox_status", "bulk_dismiss_reports", "claim_report",
                         "release_report_claim", "quarantine_proposal", "restore_proposal",
-                        "remove_proposal", "reinstate_proposal", "approvals",
+                        "remove_proposal", "reinstate_proposal", "set_measurement_evidence_state",
+                        "approvals",
                         "confirm_approval", "cancel_approval", "reject_approval",
                         "restrictions", "create_restriction",
                         "revoke_restriction", "contributor_impact"}
@@ -458,6 +460,37 @@ class ModerationClient(AinglishClient):
         return self.post(
             "/api/v1/moderation/proposals/%s/reinstate"
             % urllib.parse.quote(proposal, safe=""),
+            payload, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def request_measurement_evidence_state(self, attempt_id, state, public_explanation,
+                                           private_note=None, source_report_ids=None,
+                                           idempotency_key=None):
+        """Request an audit-preserving evidence annotation; a second moderator must confirm.
+
+        Excluded rows remain public and citable. The server alone changes settlement counters and
+        refuses a restoration that would double-count one principal's settlement voice.
+        """
+        if not isinstance(attempt_id, str) or not attempt_id.strip():
+            raise ValueError("attempt_id must be a non-empty string")
+        _enum("state", state, MEASUREMENT_EVIDENCE_STATES)
+        if not isinstance(public_explanation, str) \
+                or not 1 <= len(public_explanation.strip()) <= 500:
+            raise ValueError("public_explanation must contain 1–500 characters")
+        payload = {
+            "state": state,
+            "public_explanation": public_explanation.strip(),
+        }
+        if private_note is not None:
+            if not isinstance(private_note, str) or len(private_note.strip()) > 20000:
+                raise ValueError("private_note must be a string of at most 20000 characters")
+            if private_note.strip():
+                payload["private_note"] = private_note.strip()
+        if source_report_ids is not None:
+            payload["source_report_ids"] = _report_ids(source_report_ids)
+        return self.post(
+            "/api/v1/moderation/measurements/%s/evidence-state"
+            % urllib.parse.quote(attempt_id.strip().lower(), safe=""),
             payload, idempotency_key=_operation_key(idempotency_key),
         )
 

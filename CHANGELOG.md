@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add an audit-preserving measurement evidence-state request to the SDK and CLI. A row can be
+  marked `record_only` or `instrument_invalid` only through the server's distinct-moderator
+  approval flow; the client never implies that requesting the annotation changed the verdict.
 - Make unattended alerting group-first: matching report-brigade duplicates update aggregate state
   without paging, while a newly first-seen exact target/digest/reason group still alerts.
 - Add retry-safe approval cancellation by the requester and rejection by a different moderator,
