@@ -10,8 +10,8 @@ import tempfile
 from ainglish.client import AinglishError
 
 from .client import (
-    APPROVAL_DECISION_REASONS, APPROVAL_STATUSES, CASE_STATUSES, MEASUREMENT_EVIDENCE_STATES,
-    REASON_CODES,
+    APPROVAL_DECISION_REASONS, APPROVAL_STATUSES, CASE_STATUSES, CASE_TARGET_TYPES,
+    ITEM_ACTIONS, ITEM_TYPES, MEASUREMENT_EVIDENCE_STATES, REASON_CODES,
     REPORT_STATUSES, RESTRICTION_STATUSES,
     RESTRICTION_SUBJECT_TYPES, ModerationClient,
 )
@@ -33,6 +33,31 @@ def _client(args):
         colony_base=args.colony_base,
         timeout=args.timeout,
     )
+
+
+def _batch_preview(file_path):
+    """Extract only the exact digest bindings needed for the batch mutation."""
+    if os.path.getsize(file_path) > 1024 * 1024:
+        raise ValueError("batch preview file must be at most 1 MiB")
+    with open(file_path, "r", encoding="utf-8") as handle:
+        value = json.load(handle)
+    if not isinstance(value, dict) \
+            or value.get("kind") != "ainglish.moderation.item_batch_impact" \
+            or not isinstance(value.get("batch_digest"), str) \
+            or not isinstance(value.get("items"), list):
+        raise ValueError("preview file is not an item batch impact envelope")
+    reviewed = []
+    for impact in value["items"]:
+        target = impact.get("target") if isinstance(impact, dict) else None
+        if not isinstance(target, dict) or not isinstance(impact.get("impact_digest"), str):
+            raise ValueError("preview file contains an invalid item impact")
+        reviewed.append({
+            "type": target.get("type"),
+            "id": target.get("id"),
+            "target_digest": target.get("digest"),
+            "impact_digest": impact["impact_digest"],
+        })
+    return reviewed, value["batch_digest"]
 
 
 def _export_json(value, output_path):
@@ -117,7 +142,7 @@ def _build_parser():
     cases = commands.add_parser("cases", help="List moderation cases.")
     cases.add_argument("--status", choices=CASE_STATUSES)
     cases.add_argument("--reason-code", choices=REASON_CODES)
-    cases.add_argument("--target-type", choices=("proposal",))
+    cases.add_argument("--target-type", choices=CASE_TARGET_TYPES)
     cases.add_argument("--limit", type=int, default=50)
     cases.add_argument("--cursor")
     case = commands.add_parser("case", help="Inspect one case and its audit events.")
@@ -160,6 +185,57 @@ def _build_parser():
         "release-report-claim", help="Release a review lease without resolving the report.")
     release_claim.add_argument("id")
     release_claim.add_argument("--idempotency-key")
+
+    item_impact = commands.add_parser(
+        "item-impact", help="Preview one exact item transition and its governance effect.")
+    item_impact.add_argument("type", choices=ITEM_TYPES)
+    item_impact.add_argument("id")
+    item_impact.add_argument("--action", required=True, choices=ITEM_ACTIONS)
+    item_impact_batch = commands.add_parser(
+        "item-impact-batch", help="Preview 1–20 item quarantines on independent proposals.")
+    item_impact_batch.add_argument(
+        "--item", action="append", nargs=2, required=True, metavar=("TYPE", "ID"),
+        help="Exact item reference; repeat up to 20 times.")
+
+    quarantine_item = commands.add_parser(
+        "quarantine-item", help="Immediately contain one exact reviewed contribution.")
+    quarantine_item.add_argument("type", choices=ITEM_TYPES)
+    quarantine_item.add_argument("id")
+    quarantine_item.add_argument("--reason-code", required=True, choices=REASON_CODES)
+    quarantine_item.add_argument("--target-digest", required=True)
+    quarantine_item.add_argument("--impact-digest", required=True)
+    quarantine_item.add_argument("--public-explanation")
+    quarantine_item.add_argument("--private-note")
+    quarantine_item.add_argument("--private-note-file")
+    quarantine_item.add_argument(
+        "--source-report-id", action="append", dest="source_report_ids",
+        help="Exact matching report to action atomically; repeat up to 20 times.")
+    quarantine_item.add_argument("--idempotency-key")
+
+    quarantine_item_batch = commands.add_parser(
+        "quarantine-item-batch", help="Atomically contain an exact reviewed batch preview.")
+    quarantine_item_batch.add_argument(
+        "--preview-file", required=True,
+        help="JSON output saved from item-impact-batch; no source reports are accepted.")
+    quarantine_item_batch.add_argument("--reason-code", required=True, choices=REASON_CODES)
+    quarantine_item_batch.add_argument("--public-explanation")
+    quarantine_item_batch.add_argument("--private-note")
+    quarantine_item_batch.add_argument("--private-note-file")
+    quarantine_item_batch.add_argument("--idempotency-key")
+
+    for name, help_text in (
+        ("restore-item", "Request restoration of a quarantined contribution."),
+        ("remove-item", "Request final removal of a quarantined contribution."),
+        ("reinstate-item", "Request that a removed contribution return to quarantine."),
+    ):
+        command = commands.add_parser(name, help=help_text)
+        command.add_argument("type", choices=ITEM_TYPES)
+        command.add_argument("id")
+        command.add_argument("--target-digest", required=True)
+        command.add_argument("--impact-digest", required=True)
+        command.add_argument("--resolution-note")
+        command.add_argument("--resolution-note-file")
+        command.add_argument("--idempotency-key")
 
     quarantine = commands.add_parser("quarantine", help="Immediately hide a proposal tree.")
     quarantine.add_argument("proposal")
@@ -312,6 +388,36 @@ def _run(client, args):
         return client.claim_report(args.id, args.lease_seconds, args.idempotency_key)
     if args.command == "release-report-claim":
         return client.release_report_claim(args.id, args.idempotency_key)
+    if args.command == "item-impact":
+        return client.item_impact(args.type, args.id, args.action)
+    if args.command == "item-impact-batch":
+        return client.item_impact_batch([
+            {"type": item_type, "id": item_id} for item_type, item_id in args.item
+        ])
+    if args.command == "quarantine-item":
+        note = _text(args.private_note, args.private_note_file)
+        return client.quarantine_item(
+            args.type, args.id, args.reason_code, args.target_digest, args.impact_digest,
+            args.public_explanation, note, args.source_report_ids, args.idempotency_key,
+        )
+    if args.command == "quarantine-item-batch":
+        note = _text(args.private_note, args.private_note_file)
+        items, batch_digest = _batch_preview(args.preview_file)
+        return client.quarantine_item_batch(
+            items, batch_digest, args.reason_code, args.public_explanation, note,
+            args.idempotency_key,
+        )
+    if args.command in ("restore-item", "remove-item", "reinstate-item"):
+        note = _text(args.resolution_note, args.resolution_note_file)
+        operation = {
+            "restore-item": client.restore_item,
+            "remove-item": client.remove_item,
+            "reinstate-item": client.reinstate_item,
+        }[args.command]
+        return operation(
+            args.type, args.id, args.target_digest, args.impact_digest,
+            args.idempotency_key, note,
+        )
     if args.command == "quarantine":
         note = _text(args.private_note, args.private_note_file)
         legacy_report = args.report_ids[0] if args.report_ids and len(args.report_ids) == 1 else None

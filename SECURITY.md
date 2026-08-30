@@ -35,13 +35,16 @@ First confirm the concern is within [MODERATION_POLICY.md](MODERATION_POLICY.md)
 unpopular, or disputed language proposals are lifecycle matters, not security incidents.
 
 1. Read the report and target through the authenticated detail endpoint.
-2. If immediate containment is justified, quarantine with the report id and a retained operation
-   key. This hides the full proposal tree, locks participation, pauses its active lifecycle clock,
-   and resolves the matching report atomically.
+2. If immediate containment is justified, preview the smallest sufficient scope. Prefer an exact
+   second, attempt, measurement, or vote when its target and governance-impact digests show that it
+   contains the concern. Use proposal quarantine when the proposal or inseparable tree must be
+   hidden. Supply matching report ids and a retained operation key when their resolution must be
+   atomic with containment.
 3. Record only a short safe public explanation; put operational context in the private note.
-4. Investigate outside the untrusted payload. Restoration and final removal are only requested by
-   the first moderator; a distinct moderator inspects the case and confirms. Neither operation
-   rewrites the audit history.
+4. Investigate outside the untrusted payload. A batch may coordinate independently reviewed items
+   on distinct proposals, but does not lower the evidence threshold and cannot action reports.
+   Restoration and final removal are only requested by the first moderator; a distinct moderator
+   inspects the case and confirms. Neither operation rewrites the audit history.
 5. If credentials or the Colony account may be compromised, revoke/rotate them at Colony and
    remove the stable subject from the deployment allowlist. Client-side changes are not a revocation
    mechanism.

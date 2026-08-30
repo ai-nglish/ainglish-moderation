@@ -28,6 +28,13 @@ class Probe(ModerationClient):
                 "bulk_dismiss_reports": "/api/v1/moderation/reports/dismiss",
                 "claim_report": "/api/v1/moderation/reports/{id}/claim",
                 "release_report_claim": "/api/v1/moderation/reports/{id}/release-claim",
+                "item_impact": "/api/v1/moderation/items/{type}/{id}/impact",
+                "item_impact_batch": "/api/v1/moderation/items/impact-batch",
+                "quarantine_item_batch": "/api/v1/moderation/items/quarantine-batch",
+                "quarantine_item": "/api/v1/moderation/items/{type}/{id}/quarantine",
+                "restore_item": "/api/v1/moderation/items/{type}/{id}/restore",
+                "remove_item": "/api/v1/moderation/items/{type}/{id}/remove",
+                "reinstate_item": "/api/v1/moderation/items/{type}/{id}/reinstate",
                 "quarantine_proposal": "/api/v1/moderation/proposals/{slug}/quarantine",
                 "restore_proposal": "/api/v1/moderation/proposals/{slug}/restore",
                 "remove_proposal": "/api/v1/moderation/proposals/{slug}/remove",
@@ -85,10 +92,10 @@ class ClientTest(unittest.TestCase):
 
     def test_versioned_user_agent_and_private_reads(self):
         self.assertEqual(USER_AGENT, self.client.user_agent)
-        self.client.cases(status="open", reason_code="spam", target_type="proposal", limit=20,
+        self.client.cases(status="open", reason_code="spam", target_type="vote", limit=20,
                           cursor="opaque")
         self.assertEqual(("GET", "/api/v1/moderation/cases", {
-            "status": "open", "reason_code": "spam", "target_type": "proposal",
+            "status": "open", "reason_code": "spam", "target_type": "vote",
             "limit": 20, "cursor": "opaque",
         }, True), self.client.calls[-1])
         self.client.case("case/id")
@@ -208,6 +215,109 @@ class ClientTest(unittest.TestCase):
             "source_report_ids": ["report-1", "report-2"],
         }, annotated["payload"])
         self.assertEqual("evidence-state-operation-001", annotated["idempotency_key"])
+
+    def test_item_scoped_previews_mutations_and_terminal_requests_are_exact(self):
+        target_digest = "a" * 64
+        impact_digest = "b" * 64
+        batch_digest = "c" * 64
+
+        preview = self.client.item_impact("attempt", "attempt-id", "quarantine")
+        self.assertEqual("/api/v1/moderation/items/attempt/attempt-id/impact", preview["path"])
+        self.assertEqual(
+            ("GET", preview["path"], {"action": "quarantine"}, True),
+            self.client.calls[-1],
+        )
+
+        batch = self.client.item_impact_batch([
+            {"type": "second", "id": "second-1"},
+            {"type": "vote", "id": "vote-2"},
+        ])
+        self.assertEqual("/api/v1/moderation/items/impact-batch", batch["path"])
+        self.assertEqual({"items": [
+            {"type": "second", "id": "second-1"},
+            {"type": "vote", "id": "vote-2"},
+        ]}, batch["payload"])
+        self.assertIsNone(batch["idempotency_key"])
+
+        quarantined = self.client.quarantine_item(
+            "measurement", "measurement-id", "junk", target_digest, impact_digest,
+            "  Not part of the public record.  ", "  internal evidence  ",
+            ["report-1", "report-2"], "quarantine-item-operation-001",
+        )
+        self.assertEqual(
+            "/api/v1/moderation/items/measurement/measurement-id/quarantine",
+            quarantined["path"],
+        )
+        self.assertEqual({
+            "reason_code": "junk",
+            "target_digest": target_digest,
+            "impact_digest": impact_digest,
+            "public_explanation": "Not part of the public record.",
+            "private_note": "internal evidence",
+            "source_report_ids": ["report-1", "report-2"],
+        }, quarantined["payload"])
+        self.assertEqual("quarantine-item-operation-001", quarantined["idempotency_key"])
+
+        reviewed = [{
+            "type": "vote", "id": "vote-2",
+            "target_digest": target_digest, "impact_digest": impact_digest,
+        }]
+        quarantined_batch = self.client.quarantine_item_batch(
+            reviewed, batch_digest, "spam", " Coordinated junk. ", " private ",
+            "quarantine-item-batch-operation-001",
+        )
+        self.assertEqual(
+            "/api/v1/moderation/items/quarantine-batch", quarantined_batch["path"])
+        self.assertEqual({
+            "items": reviewed,
+            "batch_digest": batch_digest,
+            "reason_code": "spam",
+            "public_explanation": "Coordinated junk.",
+            "private_note": "private",
+        }, quarantined_batch["payload"])
+
+        for method, action in (
+            (self.client.restore_item, "restore"),
+            (self.client.remove_item, "remove"),
+            (self.client.reinstate_item, "reinstate"),
+        ):
+            transitioned = method(
+                "vote", "vote-id", target_digest, impact_digest,
+                "terminal-item-operation-001", " Reviewed decision. ",
+            )
+            self.assertEqual(
+                "/api/v1/moderation/items/vote/vote-id/%s" % action,
+                transitioned["path"],
+            )
+            self.assertEqual({
+                "target_digest": target_digest,
+                "impact_digest": impact_digest,
+                "resolution_note": "Reviewed decision.",
+            }, transitioned["payload"])
+            self.assertEqual("terminal-item-operation-001", transitioned["idempotency_key"])
+
+    def test_item_helpers_reject_ambiguous_or_unbound_local_input(self):
+        digest = "a" * 64
+        invalid_calls = (
+            lambda: self.client.item_impact(None, "id", "quarantine"),
+            lambda: self.client.item_impact("proposal", "id", "quarantine"),
+            lambda: self.client.item_impact("vote", "", "quarantine"),
+            lambda: self.client.item_impact("vote", "id/with/slash", "quarantine"),
+            lambda: self.client.item_impact("vote", "id", "hide"),
+            lambda: self.client.item_impact_batch([]),
+            lambda: self.client.item_impact_batch([
+                {"type": "vote", "id": "same"}, {"type": "vote", "id": "same"},
+            ]),
+            lambda: self.client.quarantine_item(
+                "vote", "id", "spam", digest.upper(), digest),
+            lambda: self.client.quarantine_item_batch([
+                {"type": "vote", "id": "id", "target_digest": digest},
+            ], digest, "spam"),
+        )
+        for call in invalid_calls:
+            with self.assertRaises(ValueError):
+                call()
+        self.assertEqual([], self.client.calls)
 
     def test_invalid_enums_and_keys_refuse_locally(self):
         for call in (
