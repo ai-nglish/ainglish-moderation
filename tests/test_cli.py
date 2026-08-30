@@ -435,6 +435,34 @@ class CliTest(unittest.TestCase):
         self.assertIn("not an item batch impact envelope", error)
         self.assertEqual([], fake.calls)
 
+    def test_an_oversized_preview_file_is_refused_before_it_is_parsed(self):
+        """The 1 MiB cap is a stated limit, so it needs a test that fails without it.
+
+        Deleting the os.path.getsize guard used to leave the whole suite green, which made the
+        README sentence a comment rather than a limit.
+        """
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as directory:
+            preview_path = os.path.join(directory, "preview.json")
+            # Valid envelope, so only the SIZE can be what refuses it.
+            payload = {"kind": "ainglish.moderation.item_batch_impact",
+                       "batch_digest": "a" * 64,
+                       "items": [{"target": {"type": "measurement", "id": "m-1",
+                                             "digest": "b" * 64},
+                                  "impact_digest": "c" * 64}],
+                       "padding": "x" * (1024 * 1024)}
+            with open(preview_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            self.assertGreater(os.path.getsize(preview_path), 1024 * 1024)
+            code, output, error = self.run_cli(fake, [
+                "quarantine-item-batch", "--preview-file", preview_path,
+                "--reason-code", "junk",
+            ])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertIn("at most 1 MiB", error)
+        self.assertEqual([], fake.calls, "an oversized preview must cost no API call")
+
     def test_two_person_and_impact_commands_are_scriptable(self):
         fake = FakeClient()
         for argv, expected in (

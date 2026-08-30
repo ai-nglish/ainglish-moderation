@@ -252,7 +252,11 @@ not need this package.
   both the reviewed item bytes and the reviewed governance-graph effect; stale previews fail closed.
 - Batch quarantine accepts 1–20 items on distinct proposals, commits atomically, and actions no
   source reports. One-item quarantine remains available when report resolution must share the
-  containment transaction.
+  containment transaction. The 1–20 bound is enforced on the preview and on the mutation
+  independently, so relaxing one cannot widen the other.
+- A saved batch preview passed with `--preview-file` is read only if it is **at most 1 MiB**, and
+  only its exact target/impact digest bindings are extracted; an oversized file is refused before
+  it is parsed and before any API call.
 - A report-linked quarantine is one database transaction and is refused before mutation if any
   named report names a different proposal or stale content digest.
 - List views do not expose case private notes or raw inspected proposal content.

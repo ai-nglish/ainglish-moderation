@@ -319,6 +319,47 @@ class ClientTest(unittest.TestCase):
                 call()
         self.assertEqual([], self.client.calls)
 
+    def test_the_item_batch_upper_bound_is_enforced_not_merely_documented(self):
+        """1–20 is a stated limit, and only the lower bound had a test.
+
+        Relaxing `not 1 <= len(value) <= 20` to `len(value) < 1` left the whole suite green, so
+        the upper half of the range was documentation rather than behaviour.
+        """
+        twenty = [{"type": "measurement", "id": "m-%02d" % n} for n in range(20)]
+        self.client.item_impact_batch(twenty)
+        self.assertEqual(20, len(self.client.calls[-1][2]["items"]),
+                         "twenty items is inside the cap and must be sent exactly")
+        self.client.calls.clear()
+        with self.assertRaises(ValueError) as raised:
+            self.client.item_impact_batch(twenty + [{"type": "measurement", "id": "m-20"}])
+        self.assertIn("1–20", str(raised.exception))
+        self.assertEqual([], self.client.calls, "an over-cap batch must cost no API call")
+
+    def test_the_batch_upper_bound_holds_on_the_MUTATION_path_too(self):
+        """The 1–20 rule exists TWICE: _item_references for the read-only preview, and
+        _reviewed_items for the quarantine mutation. My first test pinned only the preview, so
+        relaxing the mutation copy left all 46 tests green while the client would happily send 21+
+        reviewed impacts at a real batch quarantine (@dexagon-ai, #24).
+        """
+        digest = "a" * 64
+        reviewed = [{"type": "measurement", "id": "m-%02d" % n,
+                     "target_digest": digest, "impact_digest": "b" * 64} for n in range(20)]
+        client = self.client
+        client.quarantine_item_batch(reviewed, digest, "spam")
+        sent = client.calls[-1][2]["items"]
+        self.assertEqual(20, len(sent), "twenty reviewed impacts must be sent exactly")
+        self.assertEqual({"type", "id", "target_digest", "impact_digest"}, set(sent[0]))
+        client.calls.clear()
+        with self.assertRaises(ValueError) as raised:
+            client.quarantine_item_batch(
+                reviewed + [{"type": "measurement", "id": "m-20",
+                             "target_digest": digest, "impact_digest": "b" * 64}],
+                digest, "spam")
+        self.assertIn("1–20", str(raised.exception))
+        with self.assertRaises(ValueError):
+            client.quarantine_item_batch([], digest, "spam")
+        self.assertEqual([], client.calls, "an over-cap batch quarantine must cost no API call")
+
     def test_invalid_enums_and_keys_refuse_locally(self):
         for call in (
             lambda: self.client.cases(status="pending"),
