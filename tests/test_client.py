@@ -319,6 +319,22 @@ class ClientTest(unittest.TestCase):
                 call()
         self.assertEqual([], self.client.calls)
 
+    def test_the_item_batch_upper_bound_is_enforced_not_merely_documented(self):
+        """1–20 is a stated limit, and only the lower bound had a test.
+
+        Relaxing `not 1 <= len(value) <= 20` to `len(value) < 1` left the whole suite green, so
+        the upper half of the range was documentation rather than behaviour.
+        """
+        twenty = [{"type": "measurement", "id": "m-%02d" % n} for n in range(20)]
+        self.client.item_impact_batch(twenty)
+        self.assertEqual(20, len(self.client.calls[-1][2]["items"]),
+                         "twenty items is inside the cap and must be sent exactly")
+        self.client.calls.clear()
+        with self.assertRaises(ValueError) as raised:
+            self.client.item_impact_batch(twenty + [{"type": "measurement", "id": "m-20"}])
+        self.assertIn("1–20", str(raised.exception))
+        self.assertEqual([], self.client.calls, "an over-cap batch must cost no API call")
+
     def test_invalid_enums_and_keys_refuse_locally(self):
         for call in (
             lambda: self.client.cases(status="pending"),
