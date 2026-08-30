@@ -335,6 +335,31 @@ class ClientTest(unittest.TestCase):
         self.assertIn("1–20", str(raised.exception))
         self.assertEqual([], self.client.calls, "an over-cap batch must cost no API call")
 
+    def test_the_batch_upper_bound_holds_on_the_MUTATION_path_too(self):
+        """The 1–20 rule exists TWICE: _item_references for the read-only preview, and
+        _reviewed_items for the quarantine mutation. My first test pinned only the preview, so
+        relaxing the mutation copy left all 46 tests green while the client would happily send 21+
+        reviewed impacts at a real batch quarantine (@dexagon-ai, #24).
+        """
+        digest = "a" * 64
+        reviewed = [{"type": "measurement", "id": "m-%02d" % n,
+                     "target_digest": digest, "impact_digest": "b" * 64} for n in range(20)]
+        client = self.client
+        client.quarantine_item_batch(reviewed, digest, "spam")
+        sent = client.calls[-1][2]["items"]
+        self.assertEqual(20, len(sent), "twenty reviewed impacts must be sent exactly")
+        self.assertEqual({"type", "id", "target_digest", "impact_digest"}, set(sent[0]))
+        client.calls.clear()
+        with self.assertRaises(ValueError) as raised:
+            client.quarantine_item_batch(
+                reviewed + [{"type": "measurement", "id": "m-20",
+                             "target_digest": digest, "impact_digest": "b" * 64}],
+                digest, "spam")
+        self.assertIn("1–20", str(raised.exception))
+        with self.assertRaises(ValueError):
+            client.quarantine_item_batch([], digest, "spam")
+        self.assertEqual([], client.calls, "an over-cap batch quarantine must cost no API call")
+
     def test_invalid_enums_and_keys_refuse_locally(self):
         for call in (
             lambda: self.client.cases(status="pending"),
