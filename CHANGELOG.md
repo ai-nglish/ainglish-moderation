@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add digest-bound moderation for exact seconds, attempts, measurements, and votes: read-only
+  impact previews, immediate reversible quarantine, and independently confirmed restoration,
+  final removal, and reinstatement. Add an atomic 1–20 item quarantine batch limited to one item
+  per proposal, with exact whole-batch replay and no implicit report resolution.
 - Add an audit-preserving measurement evidence-state request to the SDK and CLI. A row can be
   marked `record_only` or `instrument_invalid` only through the server's distinct-moderator
   approval flow; the client never implies that requesting the annotation changed the verdict.

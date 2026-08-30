@@ -23,6 +23,9 @@ APPROVAL_DECISION_REASONS = (
     "no_longer_needed", "target_changed", "insufficient_evidence", "unsafe_request", "other",
 )
 MEASUREMENT_EVIDENCE_STATES = ("valid", "record_only", "instrument_invalid")
+ITEM_TYPES = ("second", "attempt", "measurement", "vote")
+ITEM_ACTIONS = ("quarantine", "restore", "remove", "reinstate")
+CASE_TARGET_TYPES = ("proposal",) + ITEM_TYPES
 USER_AGENT = "ainglish-moderation-python/%s" % __version__
 
 
@@ -53,6 +56,73 @@ def _report_ids(value):
             raise ValueError("report_ids must not contain duplicates")
         result.append(report_id)
     return result
+
+
+def _digest(name, value):
+    if not isinstance(value, str) or len(value) != 64 \
+            or any(ch not in "0123456789abcdef" for ch in value):
+        raise ValueError("%s must be a lowercase SHA-256 digest" % name)
+    return value
+
+
+def _item_reference(item_type, item_id):
+    if not isinstance(item_type, str):
+        raise ValueError("item_type is required")
+    _enum("item_type", item_type, ITEM_TYPES)
+    item_id = item_id.strip() if isinstance(item_id, str) else ""
+    if not item_id or len(item_id) > 191 \
+            or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-"
+                   for ch in item_id):
+        raise ValueError("item_id must contain 1–191 ASCII letters, digits, or hyphens")
+    return {"type": item_type, "id": item_id}
+
+
+def _item_references(value):
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 20:
+        raise ValueError("items must be a list of 1–20 exact item references")
+    result = []
+    identities = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"type", "id"}:
+            raise ValueError("each item must contain exactly type and id")
+        reference = _item_reference(item["type"], item["id"])
+        identity = (reference["type"], reference["id"])
+        if identity in identities:
+            raise ValueError("items must not contain duplicate references")
+        identities.add(identity)
+        result.append(reference)
+    return result
+
+
+def _reviewed_items(value):
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 20:
+        raise ValueError("items must be a list of 1–20 reviewed item impacts")
+    result = []
+    identities = set()
+    expected = {"type", "id", "target_digest", "impact_digest"}
+    for item in value:
+        if not isinstance(item, dict) or set(item) != expected:
+            raise ValueError(
+                "each reviewed item must contain exactly type, id, target_digest and impact_digest")
+        reference = _item_reference(item["type"], item["id"])
+        identity = (reference["type"], reference["id"])
+        if identity in identities:
+            raise ValueError("items must not contain duplicate references")
+        identities.add(identity)
+        result.append({
+            **reference,
+            "target_digest": _digest("target_digest", item["target_digest"]),
+            "impact_digest": _digest("impact_digest", item["impact_digest"]),
+        })
+    return result
+
+
+def _optional_text(name, value, maximum):
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value.strip()) > maximum:
+        raise ValueError("%s must be a string of at most %d characters" % (name, maximum))
+    return value.strip() or None
 
 
 class ModerationClient(AinglishClient):
@@ -104,6 +174,8 @@ class ModerationClient(AinglishClient):
                         "inbox_status", "bulk_dismiss_reports", "claim_report",
                         "release_report_claim", "quarantine_proposal", "restore_proposal",
                         "remove_proposal", "reinstate_proposal", "set_measurement_evidence_state",
+                        "item_impact", "item_impact_batch", "quarantine_item_batch",
+                        "quarantine_item", "restore_item", "remove_item", "reinstate_item",
                         "approvals",
                         "confirm_approval", "cancel_approval", "reject_approval",
                         "restrictions", "create_restriction",
@@ -163,7 +235,7 @@ class ModerationClient(AinglishClient):
         """
         _enum("status", status, CASE_STATUSES)
         _enum("reason_code", reason_code, REASON_CODES)
-        _enum("target_type", target_type, ("proposal",))
+        _enum("target_type", target_type, CASE_TARGET_TYPES)
         params = {k: v for k, v in (
             ("status", status), ("reason_code", reason_code), ("target_type", target_type),
             ("limit", limit), ("cursor", cursor),
@@ -393,6 +465,136 @@ class ModerationClient(AinglishClient):
         )
 
     # ------------------------------------------------------------------ publication controls
+    def item_impact(self, item_type, item_id, action):
+        """Read-only exact-item transition preview with target and graph-impact digests."""
+        reference = _item_reference(item_type, item_id)
+        if not isinstance(action, str):
+            raise ValueError("action is required")
+        _enum("action", action, ITEM_ACTIONS)
+        return self.get(
+            "/api/v1/moderation/items/%s/%s/impact" % (
+                urllib.parse.quote(reference["type"], safe=""),
+                urllib.parse.quote(reference["id"], safe=""),
+            ),
+            params={"action": action}, auth=True,
+        )
+
+    def item_impact_batch(self, items):
+        """Read-only POST preview for 1–20 independent proposal graphs.
+
+        This intentionally sends no idempotency key because it creates no case, approval, audit
+        event, or publication change. The returned batch digest commits to the canonical item set
+        and every per-item impact.
+        """
+        return self.post(
+            "/api/v1/moderation/items/impact-batch",
+            {"items": _item_references(items)},
+        )
+
+    def quarantine_item(self, item_type, item_id, reason_code, target_digest, impact_digest,
+                        public_explanation=None, private_note=None, source_report_ids=None,
+                        idempotency_key=None):
+        """Immediately contain one reviewed item and recompute its proposal atomically.
+
+        When ``source_report_ids`` is supplied, every exact matching report is actioned in the
+        same server transaction; any stale or mismatched report refuses the whole operation.
+        """
+        reference = _item_reference(item_type, item_id)
+        if not isinstance(reason_code, str):
+            raise ValueError("reason_code is required")
+        _enum("reason_code", reason_code, REASON_CODES)
+        payload = {
+            "reason_code": reason_code,
+            "target_digest": _digest("target_digest", target_digest),
+            "impact_digest": _digest("impact_digest", impact_digest),
+        }
+        public_explanation = _optional_text("public_explanation", public_explanation, 500)
+        private_note = _optional_text("private_note", private_note, 20000)
+        if public_explanation is not None:
+            payload["public_explanation"] = public_explanation
+        if private_note is not None:
+            payload["private_note"] = private_note
+        if source_report_ids is not None:
+            payload["source_report_ids"] = _report_ids(source_report_ids)
+        return self.post(
+            "/api/v1/moderation/items/%s/%s/quarantine" % (
+                urllib.parse.quote(reference["type"], safe=""),
+                urllib.parse.quote(reference["id"], safe=""),
+            ),
+            payload, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def quarantine_item_batch(self, items, batch_digest, reason_code,
+                              public_explanation=None, private_note=None,
+                              idempotency_key=None):
+        """Atomically contain 1–20 reviewed items on distinct proposals.
+
+        ``items`` is the exact list of {type,id,target_digest,impact_digest} rows copied from the
+        batch preview. Source reports are deliberately unsupported here; use
+        :meth:`quarantine_item` when report resolution must commit with containment.
+        """
+        if not isinstance(reason_code, str):
+            raise ValueError("reason_code is required")
+        _enum("reason_code", reason_code, REASON_CODES)
+        payload = {
+            "items": _reviewed_items(items),
+            "batch_digest": _digest("batch_digest", batch_digest),
+            "reason_code": reason_code,
+        }
+        public_explanation = _optional_text("public_explanation", public_explanation, 500)
+        private_note = _optional_text("private_note", private_note, 20000)
+        if public_explanation is not None:
+            payload["public_explanation"] = public_explanation
+        if private_note is not None:
+            payload["private_note"] = private_note
+        return self.post(
+            "/api/v1/moderation/items/quarantine-batch", payload,
+            idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def restore_item(self, item_type, item_id, target_digest, impact_digest,
+                     idempotency_key=None, resolution_note=None):
+        """Request independently confirmed restoration of one quarantined item."""
+        return self._request_item_transition(
+            "restore", item_type, item_id, target_digest, impact_digest,
+            idempotency_key, resolution_note,
+        )
+
+    def remove_item(self, item_type, item_id, target_digest, impact_digest,
+                    idempotency_key=None, resolution_note=None):
+        """Request independently confirmed final removal of one quarantined item."""
+        return self._request_item_transition(
+            "remove", item_type, item_id, target_digest, impact_digest,
+            idempotency_key, resolution_note,
+        )
+
+    def reinstate_item(self, item_type, item_id, target_digest, impact_digest,
+                       idempotency_key=None, resolution_note=None):
+        """Request that one removed item return to quarantine, never directly to visibility."""
+        return self._request_item_transition(
+            "reinstate", item_type, item_id, target_digest, impact_digest,
+            idempotency_key, resolution_note,
+        )
+
+    def _request_item_transition(self, action, item_type, item_id, target_digest, impact_digest,
+                                 idempotency_key, resolution_note):
+        _enum("action", action, ("restore", "remove", "reinstate"))
+        reference = _item_reference(item_type, item_id)
+        payload = {
+            "target_digest": _digest("target_digest", target_digest),
+            "impact_digest": _digest("impact_digest", impact_digest),
+        }
+        resolution_note = _optional_text("resolution_note", resolution_note, 20000)
+        if resolution_note is not None:
+            payload["resolution_note"] = resolution_note
+        return self.post(
+            "/api/v1/moderation/items/%s/%s/%s" % (
+                urllib.parse.quote(reference["type"], safe=""),
+                urllib.parse.quote(reference["id"], safe=""), action,
+            ),
+            payload, idempotency_key=_operation_key(idempotency_key),
+        )
+
     def quarantine(self, proposal, reason_code, public_explanation=None, private_note=None,
                    report_id=None, idempotency_key=None, report_ids=None):
         """Immediately hide a proposal tree and open its durable case.

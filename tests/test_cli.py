@@ -77,6 +77,34 @@ class FakeClient:
         self.calls.append(("release_report_claim", args))
         return {"ok": True}
 
+    def item_impact(self, *args):
+        self.calls.append(("item_impact", args))
+        return {"kind": "ainglish.moderation.item_impact"}
+
+    def item_impact_batch(self, *args):
+        self.calls.append(("item_impact_batch", args))
+        return {"kind": "ainglish.moderation.item_batch_impact"}
+
+    def quarantine_item(self, *args):
+        self.calls.append(("quarantine_item", args))
+        return {"ok": True}
+
+    def quarantine_item_batch(self, *args):
+        self.calls.append(("quarantine_item_batch", args))
+        return {"ok": True}
+
+    def restore_item(self, *args):
+        self.calls.append(("restore_item", args))
+        return {"approval": {"status": "pending"}}
+
+    def remove_item(self, *args):
+        self.calls.append(("remove_item", args))
+        return {"approval": {"status": "pending"}}
+
+    def reinstate_item(self, *args):
+        self.calls.append(("reinstate_item", args))
+        return {"approval": {"status": "pending"}}
+
     def quarantine(self, *args):
         self.calls.append(("quarantine", args))
         return {"ok": True}
@@ -301,6 +329,111 @@ class CliTest(unittest.TestCase):
             self.assertEqual("", error)
             self.assertTrue(json.loads(output)["ok"] if name != "report_groups" else True)
             self.assertEqual((name, arguments), fake.calls[0])
+
+    def test_item_preview_quarantine_and_terminal_commands_are_exact(self):
+        fake = FakeClient()
+        digest_a = "a" * 64
+        digest_b = "b" * 64
+        commands = (
+            (["item-impact", "attempt", "attempt-id", "--action", "quarantine"],
+             ("item_impact", ("attempt", "attempt-id", "quarantine"))),
+            (["quarantine-item", "vote", "vote-1", "--reason-code", "spam",
+              "--target-digest", digest_a, "--impact-digest", digest_b,
+              "--public-explanation", "Not part of the register.",
+              "--source-report-id", "report-1", "--source-report-id", "report-2",
+              "--idempotency-key", "quarantine-item-operation-001"],
+             ("quarantine_item", (
+                 "vote", "vote-1", "spam", digest_a, digest_b,
+                 "Not part of the register.", None, ["report-1", "report-2"],
+                 "quarantine-item-operation-001"))),
+            (["restore-item", "second", "second-1", "--target-digest", digest_a,
+              "--impact-digest", digest_b, "--resolution-note", "False positive.",
+              "--idempotency-key", "restore-item-operation-001"],
+             ("restore_item", (
+                 "second", "second-1", digest_a, digest_b,
+                 "restore-item-operation-001", "False positive."))),
+            (["remove-item", "measurement", "measurement-1", "--target-digest", digest_a,
+              "--impact-digest", digest_b, "--idempotency-key", "remove-item-operation-001"],
+             ("remove_item", (
+                 "measurement", "measurement-1", digest_a, digest_b,
+                 "remove-item-operation-001", None))),
+            (["reinstate-item", "attempt", "attempt-1", "--target-digest", digest_a,
+              "--impact-digest", digest_b,
+              "--idempotency-key", "reinstate-item-operation-001"],
+             ("reinstate_item", (
+                 "attempt", "attempt-1", digest_a, digest_b,
+                 "reinstate-item-operation-001", None))),
+        )
+        for argv, expected in commands:
+            fake.calls.clear()
+            code, _, error = self.run_cli(fake, argv)
+            self.assertEqual(0, code)
+            self.assertEqual("", error)
+            self.assertEqual(expected, fake.calls[0])
+
+    def test_item_batch_preview_and_saved_preview_quarantine_are_exact(self):
+        fake = FakeClient()
+        code, output, error = self.run_cli(fake, [
+            "item-impact-batch",
+            "--item", "second", "second-1",
+            "--item", "vote", "vote-2",
+        ])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertEqual("ainglish.moderation.item_batch_impact", json.loads(output)["kind"])
+        self.assertEqual(("item_impact_batch", ([
+            {"type": "second", "id": "second-1"},
+            {"type": "vote", "id": "vote-2"},
+        ],)), fake.calls[0])
+
+        target_digest = "a" * 64
+        impact_digest = "b" * 64
+        batch_digest = "c" * 64
+        preview = {
+            "kind": "ainglish.moderation.item_batch_impact",
+            "batch_digest": batch_digest,
+            "items": [{
+                "target": {"type": "vote", "id": "vote-2", "digest": target_digest},
+                "impact_digest": impact_digest,
+                "unrelated_server_field": "ignored",
+            }],
+            "unrelated_server_field": "ignored",
+        }
+        fake.calls.clear()
+        with tempfile.TemporaryDirectory() as directory:
+            preview_path = os.path.join(directory, "preview.json")
+            note_path = os.path.join(directory, "note.txt")
+            with open(preview_path, "w", encoding="utf-8") as handle:
+                json.dump(preview, handle)
+            with open(note_path, "w", encoding="utf-8") as handle:
+                handle.write("private incident evidence")
+            code, _, error = self.run_cli(fake, [
+                "quarantine-item-batch", "--preview-file", preview_path,
+                "--reason-code", "junk", "--private-note-file", note_path,
+                "--idempotency-key", "quarantine-batch-operation-001",
+            ])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertEqual(("quarantine_item_batch", ([{
+            "type": "vote", "id": "vote-2", "target_digest": target_digest,
+            "impact_digest": impact_digest,
+        }], batch_digest, "junk", None, "private incident evidence",
+            "quarantine-batch-operation-001")), fake.calls[0])
+
+    def test_invalid_item_batch_preview_refuses_without_an_api_call(self):
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as directory:
+            preview_path = os.path.join(directory, "preview.json")
+            with open(preview_path, "w", encoding="utf-8") as handle:
+                json.dump({"kind": "unexpected", "items": []}, handle)
+            code, output, error = self.run_cli(fake, [
+                "quarantine-item-batch", "--preview-file", preview_path,
+                "--reason-code", "junk",
+            ])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertIn("not an item batch impact envelope", error)
+        self.assertEqual([], fake.calls)
 
     def test_two_person_and_impact_commands_are_scriptable(self):
         fake = FakeClient()

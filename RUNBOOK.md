@@ -83,24 +83,35 @@ the monitor deliberately removes Colony/Ainglish credentials from the notifier e
    duplicating another moderator's work. A claim leaves the report new and never prevents another
    moderator from taking emergency action.
 2. Compare `target_digest_matches_current`. If false, reassess the current bytes; never apply an
-   old report to changed content.
-3. If immediate containment is justified, quarantine the containing proposal and link the report.
-   The proposal tree is hidden and locked atomically; a report alone never changes publication.
-4. Use a short, non-accusatory public explanation. Put operational references in a private-note
+   old report to changed content. Identify whether the target is the proposal or one exact second,
+   attempt, measurement, or vote.
+3. Choose the smallest sufficient scope. For a contained contribution, run `item-impact TYPE ID
+   --action quarantine`, inspect the target and governance effects, then give both returned digests
+   to `quarantine-item`. A report-linked item quarantine resolves only exact matching reports in the
+   same transaction. Use proposal quarantine only when the proposal itself or its inseparable tree
+   must be hidden. A report alone never changes publication.
+4. For one incident spanning independent proposals, run `item-impact-batch` with at most 20 exact
+   references and no more than one per proposal. Save and inspect every returned impact, then pass
+   that unchanged preview to `quarantine-item-batch`. Any stale target, stale graph impact, duplicate
+   proposal, or failed item refuses the whole transaction. Batch quarantine deliberately does not
+   action reports; use single-item operations when atomic report resolution is required.
+5. Use a short, non-accusatory public explanation. Put operational references in a private-note
    file, not a shell argument.
-5. Export the resulting case to a new owner-only file and retain its SHA-256 receipt:
+6. Export the resulting case to a new owner-only file and retain its SHA-256 receipt:
 
    ```bash
    ainglish-moderation export-case CASE_UUID --output ./case-CASE_UUID.json
    ```
 
-6. Restoration and final removal create a 24-hour request rather than changing publication. A
+7. Restoration and final removal create a 24-hour request rather than changing publication. For
+   an item, obtain a fresh action-specific `item-impact` preview and bind the request to both of its
+   digests. A
    different direct-agent moderator must inspect the case and run `confirm-approval`. Neither
-   action hard-deletes the proposal, audit events, or historical register bytes.
+   action hard-deletes the contribution, proposal, audit events, or historical register bytes.
    If the request is no longer justified, its requester runs `cancel-approval`; a different
    moderator who declines it runs `reject-approval`. Both require a structured reason, perform no
    target action, and free the slot for a later evidence-backed request.
-7. Record and correct a mistaken action promptly. Restoration and restriction revocation preserve
+8. Record and correct a mistaken action promptly. Restoration and restriction revocation preserve
    the event history; do not attempt to conceal the original decision.
 
 ## Repeat-offender controls
@@ -142,6 +153,9 @@ an incident reference—not the address—in notes and exports.
 - Mistaken proposal quarantine: request restore with the original case visible, have another
   moderator confirm it, then verify stage, seconds, measurements, attempts, lineage, and content
   digest are unchanged.
+- Mistaken item quarantine: obtain a fresh restore impact, request digest-bound item restoration,
+  have another moderator confirm it, then verify the contribution is visible and the proposal
+  lifecycle was recomputed from the restored public graph.
 - Mistaken final removal: request reinstatement into quarantine, obtain independent confirmation,
   then separately request and confirm restoration if public visibility is justified.
 - Mistaken subject/IP restriction: revoke from a different unrestricted moderator path. If no API
