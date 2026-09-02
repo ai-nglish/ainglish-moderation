@@ -37,6 +37,16 @@ class FakeClient:
             "untrusted_content_included": False,
         }
 
+    def incident_status(self):
+        self.calls.append(("incident_status", ()))
+        return {
+            "kind": "ainglish.moderation.incident_status",
+            "attention_required": True,
+            "attention_reasons": ["new_reports"],
+            "mutations_performed": 0,
+            "untrusted_content_included": False,
+        }
+
     def case(self, case_id):
         self.calls.append(("case", (case_id,)))
         return {"kind": "ainglish.moderation.case", "id": case_id, "private_note": "sensitive"}
@@ -136,6 +146,14 @@ class FakeClient:
     def contributor_impact(self, *args):
         self.calls.append(("contributor_impact", args))
         return {"kind": "ainglish.moderation.contributor_impact"}
+
+    def contributor_containment_impact(self, *args):
+        self.calls.append(("contributor_containment_impact", args))
+        return {"kind": "ainglish.moderation.contributor_containment_impact"}
+
+    def quarantine_contributor_batch(self, *args):
+        self.calls.append(("quarantine_contributor_batch", args))
+        return {"kind": "ainglish.moderation.contributor_containment_result"}
 
     def approvals(self, *args):
         self.calls.append(("approvals", args))
@@ -263,6 +281,29 @@ class CliTest(unittest.TestCase):
             state_path = os.path.join(directory, "state.json")
             code, output, error = self.run_cli(fake, [
                 "monitor-inbox", "--state-file", state_path,
+            ])
+        self.assertEqual(4, code)
+        self.assertEqual("", error)
+        self.assertTrue(json.loads(output)["attention_required"])
+        monitor.assert_called_once_with(fake, state_path, None, 15.0)
+
+    def test_incident_status_and_monitor_use_the_attention_exit(self):
+        fake = FakeClient()
+        code, output, error = self.run_cli(fake, ["incident-status"])
+        self.assertEqual(4, code)
+        self.assertEqual("", error)
+        self.assertEqual(["new_reports"], json.loads(output)["attention_reasons"])
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+                cli, "monitor_incidents", return_value={
+                    "kind": "ainglish.moderation.incident_transition",
+                    "attention_required": True,
+                    "transition": "incident_changed",
+                    "untrusted_content_included": False,
+                }) as monitor:
+            state_path = os.path.join(directory, "incident.json")
+            code, output, error = self.run_cli(fake, [
+                "monitor-incidents", "--state-file", state_path,
             ])
         self.assertEqual(4, code)
         self.assertEqual("", error)
@@ -485,17 +526,71 @@ class CliTest(unittest.TestCase):
             (["contributor-impact", "stable-sub"],
              ("contributor_impact", ("stable-sub",))),
             (["request-measurement-evidence-state", "attempt-1", "--state", "record_only",
+              "--reason-code", "protocol_obsolete",
               "--public-explanation", "Useful record, but not a settlement voice.",
+              "--successor-attempt-id", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
               "--source-report-id", "report-1", "--idempotency-key", "evidence-operation-001"],
              ("request_measurement_evidence_state", (
-                 "attempt-1", "record_only", "Useful record, but not a settlement voice.",
-                 None, ["report-1"], "evidence-operation-001"))),
+                 "attempt-1", "record_only", "protocol_obsolete",
+                 "Useful record, but not a settlement voice.", None, ["report-1"],
+                 "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", "evidence-operation-001"))),
         ):
             fake.calls.clear()
             code, _, error = self.run_cli(fake, argv)
             self.assertEqual(0, code)
             self.assertEqual("", error)
             self.assertEqual(expected, fake.calls[0])
+
+    def test_contributor_containment_requires_and_reuses_an_exact_preview(self):
+        fake = FakeClient()
+        code, _, error = self.run_cli(fake, [
+            "contributor-containment-impact", "stable-sub",
+            "--created-since", "2026-09-01T00:00:00Z",
+            "--type", "proposal", "--type", "measurement", "--limit", "10",
+        ])
+        self.assertEqual(0, code)
+        self.assertEqual("", error)
+        self.assertEqual((
+            "contributor_containment_impact",
+            ("stable-sub", "2026-09-01T00:00:00Z", ["proposal", "measurement"], 10),
+        ), fake.calls[0])
+
+        with tempfile.TemporaryDirectory() as directory:
+            preview_path = os.path.join(directory, "preview.json")
+            with open(preview_path, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "kind": "ainglish.moderation.contributor_containment_impact",
+                    "subject": "stable-sub", "batch_digest": "a" * 64,
+                    "items": [{
+                        "target": {
+                            "type": "proposal", "id": "some-slug", "digest": "b" * 64,
+                        },
+                        "impact_digest": "c" * 64,
+                    }],
+                }, handle)
+            fake.calls.clear()
+            code, _, error = self.run_cli(fake, [
+                "quarantine-contributor-batch", "stable-sub",
+                "--preview-file", preview_path, "--reason-code", "spam",
+                "--public-explanation", "Incident containment.",
+                "--idempotency-key", "containment-operation-001",
+            ])
+            self.assertEqual(0, code)
+            self.assertEqual("", error)
+            call = fake.calls[0]
+            self.assertEqual("quarantine_contributor_batch", call[0])
+            self.assertEqual("proposal", call[1][1][0]["type"])
+            self.assertEqual("a" * 64, call[1][2])
+
+            fake.calls.clear()
+            code, output, error = self.run_cli(fake, [
+                "quarantine-contributor-batch", "different-sub",
+                "--preview-file", preview_path, "--reason-code", "spam",
+            ])
+            self.assertEqual(2, code)
+            self.assertEqual("", output)
+            self.assertIn("for this contributor", error)
+            self.assertEqual([], fake.calls)
 
     def test_conflicting_note_sources_fail_without_an_api_call(self):
         fake = FakeClient()

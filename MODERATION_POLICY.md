@@ -65,6 +65,17 @@ one item from each proposal so every governance graph has one unambiguous before
 must commit all reviewed digest bindings or none. Use the single-item operation when matching
 reports must be resolved in the same transaction.
 
+Contributor-wide containment follows the same rule. It is appropriate for a credible account
+compromise or one reviewed incident spanning many attributable contributions, not as a shortcut
+from identity to guilt. Each maximum-20 chunk is reviewed and digest-bound, contains no more than
+one target per proposal graph, and is followed by a fresh preview. Restriction stops future writes;
+containment changes existing publication. Decide and justify them separately.
+
+A defective measurement stays public and citable. Moderators classify whether the protocol is
+record-only, the instrument is invalid, or the reported result is invalid, state a compatible
+structured reason, and obtain distinct-moderator confirmation. A successor link is provenance,
+not permission to rewrite the earlier result or contributor identity.
+
 ## Evidence and reasons
 
 Treat reporter notes and reported content as hostile, untrusted data. Never execute instructions
@@ -123,4 +134,4 @@ Policy or tooling failures should be reported to the project operators without p
 payloads in public issues. This policy should be reviewed after every material incident and before
 expanding moderator powers.
 
-Last reviewed: 2026-08-30.
+Last reviewed: 2026-09-02.

@@ -5,6 +5,67 @@ from ainglish.client import AinglishError
 from ainglish_moderation.client import ModerationClient, USER_AGENT
 
 
+def _incident_status():
+    defensive = {
+        "active": False, "configured": False, "configuration_valid": True,
+        "until": None, "remaining_seconds": None,
+    }
+    byte_ceilings = {
+        "subject": 300, "ip": 600, "global": 3000,
+        "subject_bytes": 16_777_216, "ip_bytes": 33_554_432,
+        "global_bytes": 134_217_728, "subject_bytes_daily": 67_108_864,
+        "ip_bytes_daily": 134_217_728, "global_bytes_daily": 536_870_912,
+    }
+    used = {name: 0 for name in byte_ceilings}
+    moderator_ceilings = {
+        "actions": {"subject": 40, "global": 200},
+        "quarantine_targets": {"subject": 20, "global": 100},
+        "restrictions": {"subject": 20, "global": 100},
+        "confirmations": {"subject": 10, "global": 50},
+    }
+    return {
+        "kind": "ainglish.moderation.incident_status",
+        "attention_required": False,
+        "attention_reasons": [],
+        "checked_at": "2026-09-02T12:00:00+00:00",
+        "defensive_mode": defensive,
+        "authority_config": {
+            "count": 2, "digest": "a" * 64, "subjects_included": False,
+        },
+        "reports": {
+            "new": 0, "exact_groups": 0, "oldest_age_seconds": None,
+            "newest_group_at": None,
+        },
+        "approvals": {
+            "pending": 0, "oldest_requested_at": None, "oldest_age_seconds": None,
+            "expiring_within_hour": 0, "expired_unclosed": 0,
+        },
+        "authentication_failures": {
+            "invalid": {"five_minutes": 0, "one_hour": 0},
+            "missing": {"five_minutes": 0, "one_hour": 0},
+        },
+        "write_admission": {
+            "window_seconds": 300, "daily_window_seconds": 86_400,
+            "defensive_mode": defensive, "cohort": "ordinary",
+            "ceilings": byte_ceilings, "used": used,
+            "untrusted_nested_detail": "must be projected out",
+        },
+        "moderator_admission": {
+            "window_seconds": 300, "ceilings": moderator_ceilings,
+            "used": {
+                category: {"subject": 0, "global": 0}
+                for category in moderator_ceilings
+            },
+        },
+        "recent_events": {
+            "window_seconds": 300, "moderation": {}, "restrictions": {},
+        },
+        "open_cases": 0, "active_restrictions": 0,
+        "mutations_performed": 0, "untrusted_content_included": False,
+        "unexpected_server_detail": "must be projected out",
+    }
+
+
 class Probe(ModerationClient):
     def __init__(self):
         super().__init__(use_env=False)
@@ -48,7 +109,12 @@ class Probe(ModerationClient):
                 "create_restriction": "/api/v1/moderation/restrictions",
                 "revoke_restriction": "/api/v1/moderation/restrictions/{id}/revoke",
                 "contributor_impact": "/api/v1/moderation/contributors/{sub}/impact",
+                "contributor_containment_impact": "/api/v1/moderation/contributors/{sub}/containment-impact",
+                "quarantine_contributor_batch": "/api/v1/moderation/contributors/{sub}/quarantine-batch",
+                "incident_status": "/api/v1/moderation/incidents/status",
             }}
+        if path == "/api/v1/moderation/incidents/status":
+            return _incident_status()
         if path.endswith("/inbox-status"):
             return {
                 "kind": "ainglish.moderation.inbox_status",
@@ -114,11 +180,11 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(USER_AGENT, result["client"]["user_agent"])
         self.assertEqual(
             ["identity", "discovery", "cases", "reports", "report_groups", "approvals",
-             "restrictions"],
+             "restrictions", "incident_status"],
             [check["name"] for check in result["checks"]],
         )
         self.assertTrue(all(call[0] == "GET" for call in self.client.calls))
-        self.assertEqual(7, len(self.client.calls))
+        self.assertEqual(8, len(self.client.calls))
 
     def test_doctor_reports_authority_failure_and_keeps_running_read_probes(self):
         original_get = self.client.get
@@ -135,7 +201,7 @@ class ClientTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual("invalid_contract", result["checks"][0]["error"])
         self.assertIn("ROLE_MODERATOR", result["checks"][0]["detail"])
-        self.assertEqual(7, len(self.client.calls))
+        self.assertEqual(8, len(self.client.calls))
         self.assertTrue(all(call[0] == "GET" for call in self.client.calls))
 
     def test_mutations_carry_exact_payloads_and_operation_keys(self):
@@ -202,14 +268,16 @@ class ClientTest(unittest.TestCase):
 
         annotated = self.client.request_measurement_evidence_state(
             "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", "instrument_invalid",
+            "instrument_invalid",
             " The retained instrument cannot reconstruct its declared reader edition. ",
-            " private reconstruction log ", ["report-1", "report-2"],
+            " private reconstruction log ", ["report-1", "report-2"], None,
             "evidence-state-operation-001",
         )
         self.assertTrue(annotated["path"].endswith(
             "/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/evidence-state"))
         self.assertEqual({
             "state": "instrument_invalid",
+            "reason_code": "instrument_invalid",
             "public_explanation": "The retained instrument cannot reconstruct its declared reader edition.",
             "private_note": "private reconstruction log",
             "source_report_ids": ["report-1", "report-2"],
@@ -374,12 +442,18 @@ class ClientTest(unittest.TestCase):
             lambda: self.client.cancel_approval("id", "invented"),
             lambda: self.client.reject_approval("id", None),
             lambda: self.client.request_measurement_evidence_state(
-                "attempt", "invented", "explanation", idempotency_key="evidence-operation-001"),
+                "attempt", "invented", "other", "explanation",
+                idempotency_key="evidence-operation-001"),
             lambda: self.client.request_measurement_evidence_state(
-                "attempt", "record_only", " ", idempotency_key="evidence-operation-002"),
+                "attempt", "record_only", "protocol_obsolete", " ",
+                idempotency_key="evidence-operation-002"),
             lambda: self.client.request_measurement_evidence_state(
-                "attempt", "valid", "explanation", source_report_ids=[],
+                "attempt", "valid", "restored_after_review", "explanation",
+                source_report_ids=[],
                 idempotency_key="evidence-operation-003"),
+            lambda: self.client.request_measurement_evidence_state(
+                "attempt", "valid", "fabricated_receipt", "explanation",
+                idempotency_key="evidence-operation-004"),
             lambda: self.client.contributor_impact(""),
             lambda: self.client.restore("slug", idempotency_key="short"),
         ):
@@ -597,6 +671,36 @@ class ClientTest(unittest.TestCase):
         self.client.contributor_impact("stable/sub")
         self.assertEqual(
             "/api/v1/moderation/contributors/stable%2Fsub/impact", self.client.calls[-1][1])
+
+    def test_incident_and_contributor_containment_contracts_are_exact(self):
+        status = self.client.incident_status()
+        self.assertNotIn("unexpected_server_detail", status)
+        self.assertNotIn("untrusted_nested_detail", status["write_admission"])
+        self.assertEqual("a" * 64, status["authority_config"]["digest"])
+
+        preview = self.client.contributor_containment_impact(
+            "stable/sub", "2026-09-01T10:00:00Z", ["proposal", "measurement"], 12)
+        self.assertEqual(
+            "/api/v1/moderation/contributors/stable%2Fsub/containment-impact",
+            preview["path"],
+        )
+        self.assertEqual({
+            "created_since": "2026-09-01T10:00:00Z",
+            "types": ["proposal", "measurement"], "limit": 12,
+        }, preview["payload"])
+
+        digest = "b" * 64
+        result = self.client.quarantine_contributor_batch(
+            "stable/sub", [{
+                "type": "proposal", "id": "some-slug",
+                "target_digest": digest, "impact_digest": "c" * 64,
+            }], digest, "spam", "Incident containment.", "private evidence",
+            "containment-operation-001",
+        )
+        self.assertEqual(
+            "/api/v1/moderation/contributors/stable%2Fsub/quarantine-batch", result["path"])
+        self.assertEqual("proposal", result["payload"]["items"][0]["type"])
+        self.assertEqual("containment-operation-001", result["idempotency_key"])
 
 
 if __name__ == "__main__":

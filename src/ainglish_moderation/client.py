@@ -22,10 +22,28 @@ APPROVAL_STATUSES = ("pending", "confirmed", "cancelled", "rejected", "expired")
 APPROVAL_DECISION_REASONS = (
     "no_longer_needed", "target_changed", "insufficient_evidence", "unsafe_request", "other",
 )
-MEASUREMENT_EVIDENCE_STATES = ("valid", "record_only", "instrument_invalid")
+MEASUREMENT_EVIDENCE_STATES = (
+    "valid", "record_only", "instrument_invalid", "result_invalid",
+)
+MEASUREMENT_EVIDENCE_REASONS_BY_STATE = {
+    "valid": ("restored_after_review",),
+    "record_only": ("protocol_obsolete", "insufficient_retained_material", "other"),
+    "instrument_invalid": (
+        "instrument_invalid", "insufficient_retained_material", "other",
+    ),
+    "result_invalid": (
+        "value_not_reproducible", "manifest_result_mismatch", "fabricated_receipt", "other",
+    ),
+}
 ITEM_TYPES = ("second", "attempt", "measurement", "vote")
+CONTRIBUTOR_TARGET_TYPES = ("proposal",) + ITEM_TYPES
 ITEM_ACTIONS = ("quarantine", "restore", "remove", "reinstate")
 CASE_TARGET_TYPES = ("proposal",) + ITEM_TYPES
+INCIDENT_ATTENTION_REASONS = (
+    "new_reports", "approval_backlog_age", "expired_approval_rows",
+    "defensive_mode_active", "defensive_mode_configuration_invalid",
+    "authentication_failure_surge", "admission_budget_pressure",
+)
 USER_AGENT = "ainglish-moderation-python/%s" % __version__
 
 
@@ -65,10 +83,10 @@ def _digest(name, value):
     return value
 
 
-def _item_reference(item_type, item_id):
+def _item_reference(item_type, item_id, accepted_types=ITEM_TYPES):
     if not isinstance(item_type, str):
         raise ValueError("item_type is required")
-    _enum("item_type", item_type, ITEM_TYPES)
+    _enum("item_type", item_type, accepted_types)
     item_id = item_id.strip() if isinstance(item_id, str) else ""
     if not item_id or len(item_id) > 191 \
             or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-"
@@ -94,7 +112,7 @@ def _item_references(value):
     return result
 
 
-def _reviewed_items(value):
+def _reviewed_items(value, accepted_types=ITEM_TYPES):
     if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 20:
         raise ValueError("items must be a list of 1–20 reviewed item impacts")
     result = []
@@ -104,7 +122,7 @@ def _reviewed_items(value):
         if not isinstance(item, dict) or set(item) != expected:
             raise ValueError(
                 "each reviewed item must contain exactly type, id, target_digest and impact_digest")
-        reference = _item_reference(item["type"], item["id"])
+        reference = _item_reference(item["type"], item["id"], accepted_types)
         identity = (reference["type"], reference["id"])
         if identity in identities:
             raise ValueError("items must not contain duplicate references")
@@ -123,6 +141,49 @@ def _optional_text(name, value, maximum):
     if not isinstance(value, str) or len(value.strip()) > maximum:
         raise ValueError("%s must be a string of at most %d characters" % (name, maximum))
     return value.strip() or None
+
+
+def _count(name, value):
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError("%s must be a non-negative integer" % name)
+    return value
+
+
+def _optional_timestamp(name, value):
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) > 64:
+        raise ValueError("%s must be a bounded ISO-8601 timestamp" % name)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("%s must be an ISO-8601 timestamp" % name) from error
+    if parsed.tzinfo is None:
+        raise ValueError("%s must include a timezone" % name)
+    return value
+
+
+def _defensive_receipt(value):
+    if not isinstance(value, dict) \
+            or not all(isinstance(value.get(name), bool) for name in (
+                "active", "configured", "configuration_valid")):
+        raise ValueError("incident status has an invalid defensive mode")
+    remaining = value.get("remaining_seconds")
+    if remaining is not None:
+        remaining = _count("defensive_mode.remaining_seconds", remaining)
+    return {
+        "active": value["active"],
+        "configured": value["configured"],
+        "configuration_valid": value["configuration_valid"],
+        "until": _optional_timestamp("defensive_mode.until", value.get("until")),
+        "remaining_seconds": remaining,
+    }
+
+
+def _numeric_fields(name, value, fields):
+    if not isinstance(value, dict):
+        raise ValueError("%s must be an aggregate object" % name)
+    return {field: _count("%s.%s" % (name, field), value.get(field)) for field in fields}
 
 
 class ModerationClient(AinglishClient):
@@ -179,7 +240,9 @@ class ModerationClient(AinglishClient):
                         "approvals",
                         "confirm_approval", "cancel_approval", "reject_approval",
                         "restrictions", "create_restriction",
-                        "revoke_restriction", "contributor_impact"}
+                        "revoke_restriction", "contributor_impact",
+                        "contributor_containment_impact", "quarantine_contributor_batch",
+                        "incident_status"}
             if not isinstance(endpoints, dict) or not required.issubset(endpoints):
                 raise ValueError("API discovery is missing moderation operations: %s" %
                                  ", ".join(sorted(required - set(endpoints or {}))))
@@ -212,6 +275,9 @@ class ModerationClient(AinglishClient):
         probe("approvals", lambda: self.approvals(limit=1), approval_contract)
         probe("restrictions", lambda: self.restrictions(limit=1),
               envelope_contract("ainglish.moderation.restrictions", "restrictions"))
+        probe("incident_status", self.incident_status, lambda value: {
+            "kind": value["kind"], "reachable": True,
+        })
 
         return {
             "kind": "ainglish.moderation.doctor",
@@ -665,8 +731,9 @@ class ModerationClient(AinglishClient):
             payload, idempotency_key=_operation_key(idempotency_key),
         )
 
-    def request_measurement_evidence_state(self, attempt_id, state, public_explanation,
-                                           private_note=None, source_report_ids=None,
+    def request_measurement_evidence_state(self, attempt_id, state, reason_code,
+                                           public_explanation, private_note=None,
+                                           source_report_ids=None, successor_attempt_id=None,
                                            idempotency_key=None):
         """Request an audit-preserving evidence annotation; a second moderator must confirm.
 
@@ -676,11 +743,16 @@ class ModerationClient(AinglishClient):
         if not isinstance(attempt_id, str) or not attempt_id.strip():
             raise ValueError("attempt_id must be a non-empty string")
         _enum("state", state, MEASUREMENT_EVIDENCE_STATES)
+        if reason_code not in MEASUREMENT_EVIDENCE_REASONS_BY_STATE[state]:
+            raise ValueError(
+                "reason_code for %s must be one of: %s" % (
+                    state, ", ".join(MEASUREMENT_EVIDENCE_REASONS_BY_STATE[state])))
         if not isinstance(public_explanation, str) \
                 or not 1 <= len(public_explanation.strip()) <= 500:
             raise ValueError("public_explanation must contain 1–500 characters")
         payload = {
             "state": state,
+            "reason_code": reason_code,
             "public_explanation": public_explanation.strip(),
         }
         if private_note is not None:
@@ -690,6 +762,11 @@ class ModerationClient(AinglishClient):
                 payload["private_note"] = private_note.strip()
         if source_report_ids is not None:
             payload["source_report_ids"] = _report_ids(source_report_ids)
+        if successor_attempt_id is not None:
+            if not isinstance(successor_attempt_id, str) \
+                    or not 1 <= len(successor_attempt_id.strip()) <= 36:
+                raise ValueError("successor_attempt_id must contain 1–36 characters")
+            payload["successor_attempt_id"] = successor_attempt_id.strip().lower()
         return self.post(
             "/api/v1/moderation/measurements/%s/evidence-state"
             % urllib.parse.quote(attempt_id.strip().lower(), safe=""),
@@ -756,6 +833,196 @@ class ModerationClient(AinglishClient):
             "/api/v1/moderation/contributors/%s/impact"
             % urllib.parse.quote(colony_sub.strip(), safe=""), auth=True,
         )
+
+    def contributor_containment_impact(self, colony_sub, created_since, types=None, limit=20):
+        """Preview one bounded, digest-bound containment chunk without changing publication."""
+        subject = self._contributor_subject(colony_sub)
+        if not isinstance(created_since, str) or not created_since.strip():
+            raise ValueError("created_since must be an ISO-8601 timestamp with timezone")
+        try:
+            parsed = datetime.fromisoformat(created_since.strip().replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("created_since must be an ISO-8601 timestamp with timezone") from error
+        if parsed.tzinfo is None:
+            raise ValueError("created_since must include a timezone")
+        if types is None:
+            selected_types = list(CONTRIBUTOR_TARGET_TYPES)
+        else:
+            if not isinstance(types, (list, tuple)) or not types:
+                raise ValueError("types must be a non-empty list of contributor target types")
+            selected_types = []
+            for item_type in types:
+                _enum("type", item_type, CONTRIBUTOR_TARGET_TYPES)
+                if item_type in selected_types:
+                    raise ValueError("types must not contain duplicates")
+                selected_types.append(item_type)
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 20:
+            raise ValueError("limit must be an integer from 1 to 20")
+        return self.post(
+            "/api/v1/moderation/contributors/%s/containment-impact"
+            % urllib.parse.quote(subject, safe=""),
+            {"created_since": created_since.strip(), "types": selected_types, "limit": limit},
+        )
+
+    def quarantine_contributor_batch(self, colony_sub, items, batch_digest, reason_code,
+                                     public_explanation=None, private_note=None,
+                                     idempotency_key=None):
+        """Contain one exact reviewed contributor chunk; the server rechecks every binding."""
+        subject = self._contributor_subject(colony_sub)
+        _enum("reason_code", reason_code, REASON_CODES)
+        payload = {
+            "items": _reviewed_items(items, CONTRIBUTOR_TARGET_TYPES),
+            "batch_digest": _digest("batch_digest", batch_digest),
+            "reason_code": reason_code,
+        }
+        for name, value, maximum in (
+            ("public_explanation", public_explanation, 500),
+            ("private_note", private_note, 20000),
+        ):
+            normalized = _optional_text(name, value, maximum)
+            if normalized is not None:
+                payload[name] = normalized
+        return self.post(
+            "/api/v1/moderation/contributors/%s/quarantine-batch"
+            % urllib.parse.quote(subject, safe=""),
+            payload, idempotency_key=_operation_key(idempotency_key),
+        )
+
+    def incident_status(self):
+        """Return one projected, content-free operational snapshot with zero mutations."""
+        value = self.get("/api/v1/moderation/incidents/status", auth=True)
+        if not isinstance(value, dict) \
+                or value.get("kind") != "ainglish.moderation.incident_status" \
+                or not isinstance(value.get("attention_required"), bool) \
+                or not isinstance(value.get("attention_reasons"), list) \
+                or any(reason not in INCIDENT_ATTENTION_REASONS
+                       for reason in value["attention_reasons"]) \
+                or value.get("mutations_performed") != 0 \
+                or value.get("untrusted_content_included") is not False:
+            raise ValueError("incident status returned an unsafe or unexpected envelope")
+        authority = value.get("authority_config")
+        if not isinstance(authority, dict) or authority.get("subjects_included") is not False:
+            raise ValueError("incident status unexpectedly included authority subjects")
+        _digest("authority_config.digest", authority.get("digest"))
+        report_fields = ("new", "exact_groups")
+        approval_fields = ("pending", "expiring_within_hour", "expired_unclosed")
+        byte_fields = (
+            "subject", "ip", "global", "subject_bytes", "ip_bytes", "global_bytes",
+            "subject_bytes_daily", "ip_bytes_daily", "global_bytes_daily",
+        )
+        write = value.get("write_admission")
+        if not isinstance(write, dict) or write.get("cohort") not in (
+                "ordinary", "new", "established", "moderator"):
+            raise ValueError("incident status has an invalid write-admission cohort")
+        write_used_fields = tuple(
+            field for field in byte_fields if field in write.get("used", {}))
+        if not {"subject", "global", "subject_bytes", "global_bytes",
+                "subject_bytes_daily", "global_bytes_daily"}.issubset(write_used_fields):
+            raise ValueError("incident status is missing write-admission usage")
+        moderator = value.get("moderator_admission")
+        if not isinstance(moderator, dict):
+            raise ValueError("incident status has an invalid moderator-admission object")
+        moderation_categories = (
+            "actions", "quarantine_targets", "restrictions", "confirmations",
+        )
+        moderator_ceilings = {}
+        moderator_used = {}
+        for category in moderation_categories:
+            moderator_ceilings[category] = _numeric_fields(
+                "moderator_admission.ceilings.%s" % category,
+                moderator.get("ceilings", {}).get(category), ("subject", "global"))
+            moderator_used[category] = _numeric_fields(
+                "moderator_admission.used.%s" % category,
+                moderator.get("used", {}).get(category), ("subject", "global"))
+        authentication = value.get("authentication_failures")
+        if not isinstance(authentication, dict):
+            raise ValueError("incident status has invalid authentication aggregates")
+        recent = value.get("recent_events")
+        if not isinstance(recent, dict):
+            raise ValueError("incident status has invalid recent-event aggregates")
+
+        def event_counts(kind):
+            rows = recent.get(kind)
+            if not isinstance(rows, dict) or any(
+                    not isinstance(action, str) or len(action) > 64
+                    or not action.replace("_", "").isalnum()
+                    for action in rows):
+                raise ValueError("incident status has invalid recent-event labels")
+            return {action: _count("recent_events.%s.%s" % (kind, action), count)
+                    for action, count in rows.items()}
+
+        reports = _numeric_fields("reports", value.get("reports"), report_fields)
+        reports.update({
+            "oldest_age_seconds": (
+                None if value["reports"].get("oldest_age_seconds") is None
+                else _count("reports.oldest_age_seconds",
+                            value["reports"]["oldest_age_seconds"])),
+            "newest_group_at": _optional_timestamp(
+                "reports.newest_group_at", value["reports"].get("newest_group_at")),
+        })
+        approvals = _numeric_fields("approvals", value.get("approvals"), approval_fields)
+        approvals.update({
+            "oldest_requested_at": _optional_timestamp(
+                "approvals.oldest_requested_at",
+                value["approvals"].get("oldest_requested_at")),
+            "oldest_age_seconds": (
+                None if value["approvals"].get("oldest_age_seconds") is None
+                else _count("approvals.oldest_age_seconds",
+                            value["approvals"]["oldest_age_seconds"])),
+        })
+        return {
+            "kind": value["kind"],
+            "attention_required": value["attention_required"],
+            "attention_reasons": sorted(set(value["attention_reasons"])),
+            "checked_at": _optional_timestamp("checked_at", value.get("checked_at")),
+            "defensive_mode": _defensive_receipt(value.get("defensive_mode")),
+            "authority_config": {
+                "count": _count("authority_config.count", authority.get("count")),
+                "digest": authority["digest"], "subjects_included": False,
+            },
+            "reports": reports,
+            "approvals": approvals,
+            "authentication_failures": {
+                kind: _numeric_fields(
+                    "authentication_failures.%s" % kind, authentication.get(kind),
+                    ("five_minutes", "one_hour"))
+                for kind in ("invalid", "missing")
+            },
+            "write_admission": {
+                "window_seconds": _count(
+                    "write_admission.window_seconds", write.get("window_seconds")),
+                "daily_window_seconds": _count(
+                    "write_admission.daily_window_seconds", write.get("daily_window_seconds")),
+                "defensive_mode": _defensive_receipt(write.get("defensive_mode")),
+                "cohort": write["cohort"],
+                "ceilings": _numeric_fields(
+                    "write_admission.ceilings", write.get("ceilings"), byte_fields),
+                "used": _numeric_fields(
+                    "write_admission.used", write.get("used"), write_used_fields),
+            },
+            "moderator_admission": {
+                "window_seconds": _count(
+                    "moderator_admission.window_seconds", moderator.get("window_seconds")),
+                "ceilings": moderator_ceilings, "used": moderator_used,
+            },
+            "recent_events": {
+                "window_seconds": _count(
+                    "recent_events.window_seconds", recent.get("window_seconds")),
+                "moderation": event_counts("moderation"),
+                "restrictions": event_counts("restrictions"),
+            },
+            "open_cases": _count("open_cases", value.get("open_cases")),
+            "active_restrictions": _count(
+                "active_restrictions", value.get("active_restrictions")),
+            "mutations_performed": 0,
+            "untrusted_content_included": False,
+        }
+
+    @staticmethod
+    def _contributor_subject(colony_sub):
+        if not isinstance(colony_sub, str) or not colony_sub.strip() or len(colony_sub) > 191:
+            raise ValueError("colony_sub must be a non-empty string of at most 191 characters")
+        return colony_sub.strip()
 
     # ------------------------------------------------------------------ contributor restrictions
     def restrictions(self, status=None, subject_type=None, limit=50, cursor=None):

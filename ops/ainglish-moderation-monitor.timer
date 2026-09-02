@@ -1,5 +1,5 @@
 [Unit]
-Description=Check the Ainglish moderation inbox every ten minutes
+Description=Check Ainglish moderation incident aggregates every ten minutes
 
 [Timer]
 OnBootSec=2m
