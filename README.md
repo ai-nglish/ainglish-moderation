@@ -33,12 +33,15 @@ ainglish-moderation whoami
 ainglish-moderation doctor
 ainglish-moderation inbox-status
 ainglish-moderation monitor-inbox
+ainglish-moderation incident-status
+ainglish-moderation monitor-incidents
 ainglish-moderation reports --status new
 ainglish-moderation report-groups
 ainglish-moderation cases --status open
 ainglish-moderation approvals --status pending
 ainglish-moderation request-measurement-evidence-state ATTEMPT_UUID \
   --state instrument_invalid \
+  --reason-code instrument_invalid \
   --public-explanation "The retained instrument cannot reconstruct its declared reader edition." \
   --idempotency-key evidence-state-20260823-001
 ```
@@ -92,6 +95,20 @@ ainglish-moderation quarantine-item-batch \
   --public-explanation "These contributions are temporarily unavailable while reviewed." \
   --private-note-file ./review-notes.txt \
   --idempotency-key quarantine-item-batch-20260830-001
+
+# Suspected contributor-wide incident: inventory first, then preview one bounded chunk. The
+# preview selects at most one target per proposal graph and changes no publication state.
+ainglish-moderation contributor-impact STABLE_COLONY_SUB
+ainglish-moderation contributor-containment-impact STABLE_COLONY_SUB \
+  --created-since 2026-09-01T00:00:00Z \
+  >./contributor-containment-impact.json
+# Inspect every target and governance effect. The mutation rechecks attribution and all digests.
+ainglish-moderation quarantine-contributor-batch STABLE_COLONY_SUB \
+  --preview-file ./contributor-containment-impact.json \
+  --reason-code compromised_account \
+  --public-explanation "These contributions are temporarily unavailable while reviewed." \
+  --private-note-file ./review-notes.txt \
+  --idempotency-key contributor-containment-20260902-001
 
 # If exact-item containment is insufficient, hide the full tree and resolve matching reports.
 ainglish-moderation quarantine proposal-slug \
@@ -199,6 +216,13 @@ reports in an existing group update state but do not page. Count decreases do no
 The notifier receives only content-free JSON on standard input and does not inherit Colony/Ainglish
 credentials. No report row or prose is fetched, printed, or persisted.
 
+`incident-status` is the broader content-free operational view. It combines exact report groups,
+ageing approvals, authentication-failure aggregates, admission-budget pressure, defensive-mode
+state, recent moderation/restriction event counts, and a digest (never the subjects) of the
+deployment moderator allowlist. `monitor-incidents` keeps that aggregate snapshot in a separate
+owner-only file and alerts on meaningful transitions, including authority or emergency-mode
+changes. It performs no mutation and rejects unknown attention text instead of forwarding it.
+
 ## Python
 
 ```python
@@ -235,6 +259,7 @@ c.cancel_approval(request["approval"]["id"], "no_longer_needed")
 # until a different moderator confirms request["approval"]["id"].
 request = c.request_measurement_evidence_state(
     "measurement-attempt-uuid", "instrument_invalid",
+    "instrument_invalid",
     "The retained instrument cannot reconstruct its declared reader edition.",
 )
 ```
@@ -268,7 +293,14 @@ not need this package.
   their requester or rejected by another moderator without performing the target action.
 - Removal retains database records and the append-only case history; it is not hard deletion.
 - Measurement validity changes retain the public evidence row, require two moderators, and leave
-  settlement bookkeeping and double-count prevention to the server.
+  settlement bookkeeping and double-count prevention to the server. A typed reason distinguishes
+  an obsolete protocol, an invalid instrument, and an invalid reported result. An optional later
+  same-proposal measurement is only an audit link; moderation never copies its value or identity.
+- Contributor-wide containment is a sequence of explicit, maximum-20 digest-bound chunks. Each
+  chunk selects at most one target per proposal graph, rechecks attribution atomically, and must be
+  freshly previewed; it is not an automatic account-wide hide operation.
+- Ordinary and emergency admission ceilings count request bodies as well as requests. Moderator
+  actions also have separate action, quarantine-target, restriction, and confirmation budgets.
 - The CLI emits JSON and returns non-zero on API, validation, or file errors. It never prints a
   credential.
 

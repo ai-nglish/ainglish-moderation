@@ -11,11 +11,14 @@ from ainglish.client import AinglishError
 
 from .client import (
     APPROVAL_DECISION_REASONS, APPROVAL_STATUSES, CASE_STATUSES, CASE_TARGET_TYPES,
-    ITEM_ACTIONS, ITEM_TYPES, MEASUREMENT_EVIDENCE_STATES, REASON_CODES,
+    CONTRIBUTOR_TARGET_TYPES, ITEM_ACTIONS, ITEM_TYPES,
+    MEASUREMENT_EVIDENCE_REASONS_BY_STATE, MEASUREMENT_EVIDENCE_STATES, REASON_CODES,
     REPORT_STATUSES, RESTRICTION_STATUSES,
     RESTRICTION_SUBJECT_TYPES, ModerationClient,
 )
-from .monitor import default_state_path, monitor_inbox
+from .monitor import (
+    default_incident_state_path, default_state_path, monitor_incidents, monitor_inbox,
+)
 
 
 def _text(value, file_path):
@@ -51,6 +54,32 @@ def _batch_preview(file_path):
         target = impact.get("target") if isinstance(impact, dict) else None
         if not isinstance(target, dict) or not isinstance(impact.get("impact_digest"), str):
             raise ValueError("preview file contains an invalid item impact")
+        reviewed.append({
+            "type": target.get("type"),
+            "id": target.get("id"),
+            "target_digest": target.get("digest"),
+            "impact_digest": impact["impact_digest"],
+        })
+    return reviewed, value["batch_digest"]
+
+
+def _contributor_batch_preview(file_path, subject):
+    """Extract an exact contributor preview and refuse cross-subject file reuse."""
+    if os.path.getsize(file_path) > 1024 * 1024:
+        raise ValueError("contributor preview file must be at most 1 MiB")
+    with open(file_path, "r", encoding="utf-8") as handle:
+        value = json.load(handle)
+    if not isinstance(value, dict) \
+            or value.get("kind") != "ainglish.moderation.contributor_containment_impact" \
+            or value.get("subject") != subject \
+            or not isinstance(value.get("batch_digest"), str) \
+            or not isinstance(value.get("items"), list):
+        raise ValueError("preview file is not a containment impact for this contributor")
+    reviewed = []
+    for impact in value["items"]:
+        target = impact.get("target") if isinstance(impact, dict) else None
+        if not isinstance(target, dict) or not isinstance(impact.get("impact_digest"), str):
+            raise ValueError("contributor preview contains an invalid item impact")
         reviewed.append({
             "type": target.get("type"),
             "id": target.get("id"),
@@ -138,6 +167,19 @@ def _build_parser():
         help=("Absolute path to an owner-controlled executable receiving content-free JSON "
               "on stdin."))
     monitor.add_argument("--notify-timeout", type=float, default=15.0)
+    commands.add_parser(
+        "incident-status", help="Return a content-free operational incident snapshot.")
+    incident_monitor = commands.add_parser(
+        "monitor-incidents",
+        help="Persist aggregate incident state and notify only on meaningful transitions.")
+    incident_monitor.add_argument(
+        "--state-file", default=os.environ.get(
+            "AINGLISH_MODERATION_INCIDENT_MONITOR_STATE", default_incident_state_path()))
+    incident_monitor.add_argument(
+        "--notify-program", default=os.environ.get("AINGLISH_MODERATION_NOTIFY_PROGRAM"),
+        help=("Absolute path to an owner-controlled executable receiving content-free JSON "
+              "on stdin."))
+    incident_monitor.add_argument("--notify-timeout", type=float, default=15.0)
 
     cases = commands.add_parser("cases", help="List moderation cases.")
     cases.add_argument("--status", choices=CASE_STATUSES)
@@ -272,7 +314,17 @@ def _build_parser():
     )
     evidence_state.add_argument("attempt_id")
     evidence_state.add_argument("--state", required=True, choices=MEASUREMENT_EVIDENCE_STATES)
+    evidence_state.add_argument(
+        "--reason-code", required=True,
+        choices=sorted({
+            reason for reasons in MEASUREMENT_EVIDENCE_REASONS_BY_STATE.values()
+            for reason in reasons
+        }),
+    )
     evidence_state.add_argument("--public-explanation", required=True)
+    evidence_state.add_argument(
+        "--successor-attempt-id",
+        help="Optional later same-proposal measurement retained only as an audit link.")
     evidence_state.add_argument("--private-note")
     evidence_state.add_argument("--private-note-file")
     evidence_state.add_argument(
@@ -291,6 +343,25 @@ def _build_parser():
     impact = commands.add_parser(
         "contributor-impact", help="Inventory one stable subject's attributable rows without prose.")
     impact.add_argument("colony_sub")
+    containment_impact = commands.add_parser(
+        "contributor-containment-impact",
+        help="Preview one bounded, digest-bound contributor containment chunk.")
+    containment_impact.add_argument("colony_sub")
+    containment_impact.add_argument("--created-since", required=True)
+    containment_impact.add_argument(
+        "--type", action="append", dest="types", choices=CONTRIBUTOR_TARGET_TYPES,
+        help="Contribution type to include; repeat as needed (default: all).")
+    containment_impact.add_argument("--limit", type=int, default=20)
+    contain_contributor = commands.add_parser(
+        "quarantine-contributor-batch",
+        help="Contain one exact reviewed contributor preview atomically.")
+    contain_contributor.add_argument("colony_sub")
+    contain_contributor.add_argument("--preview-file", required=True)
+    contain_contributor.add_argument("--reason-code", required=True, choices=REASON_CODES)
+    contain_contributor.add_argument("--public-explanation")
+    contain_contributor.add_argument("--private-note")
+    contain_contributor.add_argument("--private-note-file")
+    contain_contributor.add_argument("--idempotency-key")
 
     approvals = commands.add_parser("approvals", help="List two-person moderation requests.")
     approvals.add_argument("--status", choices=APPROVAL_STATUSES)
@@ -366,6 +437,10 @@ def _run(client, args):
         return client.inbox_status(args.page_size)
     if args.command == "monitor-inbox":
         return monitor_inbox(client, args.state_file, args.notify_program, args.notify_timeout)
+    if args.command == "incident-status":
+        return client.incident_status()
+    if args.command == "monitor-incidents":
+        return monitor_incidents(client, args.state_file, args.notify_program, args.notify_timeout)
     if args.command == "cases":
         return client.cases(args.status, args.reason_code, args.target_type, args.limit, args.cursor)
     if args.command == "case":
@@ -439,8 +514,8 @@ def _run(client, args):
     if args.command == "request-measurement-evidence-state":
         note = _text(args.private_note, args.private_note_file)
         return client.request_measurement_evidence_state(
-            args.attempt_id, args.state, args.public_explanation, note,
-            args.source_report_ids, args.idempotency_key,
+            args.attempt_id, args.state, args.reason_code, args.public_explanation, note,
+            args.source_report_ids, args.successor_attempt_id, args.idempotency_key,
         )
     if args.command == "restrictions":
         return client.restrictions(args.status, args.subject_type, args.limit, args.cursor)
@@ -448,6 +523,15 @@ def _run(client, args):
         return client.restriction(args.id)
     if args.command == "contributor-impact":
         return client.contributor_impact(args.colony_sub)
+    if args.command == "contributor-containment-impact":
+        return client.contributor_containment_impact(
+            args.colony_sub, args.created_since, args.types, args.limit)
+    if args.command == "quarantine-contributor-batch":
+        note = _text(args.private_note, args.private_note_file)
+        items, batch_digest = _contributor_batch_preview(args.preview_file, args.colony_sub)
+        return client.quarantine_contributor_batch(
+            args.colony_sub, items, batch_digest, args.reason_code,
+            args.public_explanation, note, args.idempotency_key)
     if args.command == "approvals":
         return client.approvals(args.status, args.limit)
     if args.command == "approval":
@@ -491,7 +575,9 @@ def main(argv=None):
         print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
         if args.command == "doctor" and not result.get("ok"):
             return 3
-        if args.command in ("inbox-status", "monitor-inbox") and result.get("attention_required"):
+        if args.command in (
+                "inbox-status", "monitor-inbox", "incident-status", "monitor-incidents",
+        ) and result.get("attention_required"):
             return 4
         return 0
     except AinglishError as error:

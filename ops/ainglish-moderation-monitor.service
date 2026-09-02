@@ -1,11 +1,11 @@
 [Unit]
-Description=Check the Ainglish moderation inbox
+Description=Check Ainglish moderation incident aggregates
 Documentation=https://github.com/ai-nglish/ainglish-moderation/blob/main/RUNBOOK.md
 
 [Service]
 Type=oneshot
 EnvironmentFile=%h/.config/ainglish-moderation/monitor.env
-ExecStart=%h/.local/bin/ainglish-moderation monitor-inbox
+ExecStart=%h/.local/bin/ainglish-moderation monitor-incidents
 SuccessExitStatus=4
 UMask=0077
 NoNewPrivileges=true

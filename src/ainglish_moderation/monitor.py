@@ -8,8 +8,14 @@ import tempfile
 
 
 _STATE_VERSION = 3
+_INCIDENT_STATE_VERSION = 1
 _AGE_THRESHOLDS = ((24 * 60 * 60, "24h"), (6 * 60 * 60, "6h"), (60 * 60, "1h"))
 _NOTIFIER_ENV_NAMES = ("HOME", "LANG", "LC_ALL", "PATH", "TZ")
+_INCIDENT_REASONS = {
+    "new_reports", "approval_backlog_age", "expired_approval_rows",
+    "defensive_mode_active", "defensive_mode_configuration_invalid",
+    "authentication_failure_surge", "admission_budget_pressure",
+}
 
 
 def default_state_path():
@@ -18,6 +24,14 @@ def default_state_path():
     if not state_root:
         state_root = os.path.join(os.path.expanduser("~"), ".local", "state")
     return os.path.join(state_root, "ainglish-moderation", "inbox-monitor.json")
+
+
+def default_incident_state_path():
+    """Return the separate per-user incident-monitor state path without creating it."""
+    state_root = os.environ.get("XDG_STATE_HOME")
+    if not state_root:
+        state_root = os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(state_root, "ainglish-moderation", "incident-monitor.json")
 
 
 def _private_parent(path):
@@ -241,6 +255,187 @@ def monitor_inbox(client, state_path, notifier_program=None, notifier_timeout=15
         "newest_new_report_at": receipt.get("newest_new_report_at"),
         "newest_new_report_group_at": receipt.get("newest_new_report_group_at"),
         "age_level": _age_level(receipt.get("oldest_new_report_age_seconds")),
+    })
+    return {
+        **event,
+        "state_changed": changed,
+        "notification_attempted": bool(notify and notifier_program),
+        "notified": notified,
+        "mutations_performed": 0,
+    }
+
+
+def _integer(value, name):
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError("incident status has an invalid %s count" % name)
+    return value
+
+
+def _incident_snapshot(receipt):
+    """Project the server receipt to fixed aggregate fields safe for disk and notifications."""
+    reasons = receipt.get("attention_reasons")
+    if not isinstance(reasons, list) or any(reason not in _INCIDENT_REASONS for reason in reasons):
+        raise ValueError("incident status has an unknown attention reason")
+    defensive = receipt.get("defensive_mode")
+    authority = receipt.get("authority_config")
+    reports = receipt.get("reports")
+    approvals = receipt.get("approvals")
+    authentication = receipt.get("authentication_failures")
+    recent = receipt.get("recent_events")
+    if not all(isinstance(value, dict) for value in (
+            defensive, authority, reports, approvals, authentication, recent)):
+        raise ValueError("incident status is missing aggregate fields")
+    if not isinstance(defensive.get("active"), bool) \
+            or not isinstance(defensive.get("configuration_valid"), bool):
+        raise ValueError("incident status has an invalid defensive mode")
+    digest = authority.get("digest")
+    if not isinstance(digest, str) or len(digest) != 64 \
+            or any(character not in "0123456789abcdef" for character in digest):
+        raise ValueError("incident status has an invalid authority digest")
+    if authority.get("subjects_included") is not False:
+        raise ValueError("incident status must not include moderator subjects")
+
+    def auth_count(kind, window):
+        values = authentication.get(kind)
+        if not isinstance(values, dict):
+            raise ValueError("incident status has invalid authentication aggregates")
+        return _integer(values.get(window), "authentication failure")
+
+    def event_total(kind):
+        values = recent.get(kind)
+        if not isinstance(values, dict) or any(
+                not isinstance(name, str) or not isinstance(count, int)
+                or isinstance(count, bool) or count < 0 for name, count in values.items()):
+            raise ValueError("incident status has invalid recent event aggregates")
+        return sum(values.values())
+
+    oldest_age = approvals.get("oldest_age_seconds")
+    if oldest_age is not None:
+        oldest_age = _integer(oldest_age, "oldest approval age")
+    newest_group = reports.get("newest_group_at")
+    if newest_group is not None and not isinstance(newest_group, str):
+        raise ValueError("incident status has an invalid newest report-group timestamp")
+    until = defensive.get("until")
+    if until is not None and not isinstance(until, str):
+        raise ValueError("incident status has an invalid defensive-mode expiry")
+
+    return {
+        "status": "attention" if receipt["attention_required"] else "clear",
+        "attention_reasons": sorted(set(reasons)),
+        "defensive_active": defensive["active"],
+        "defensive_configuration_valid": defensive["configuration_valid"],
+        "defensive_until": until,
+        "authority_count": _integer(authority.get("count"), "authority"),
+        "authority_digest": digest,
+        "report_groups": _integer(reports.get("exact_groups"), "report group"),
+        "newest_report_group_at": newest_group,
+        "pending_approvals": _integer(approvals.get("pending"), "pending approval"),
+        "approval_age_level": _age_level(oldest_age),
+        "expiring_approvals": _integer(
+            approvals.get("expiring_within_hour"), "expiring approval"),
+        "expired_approvals": _integer(approvals.get("expired_unclosed"), "expired approval"),
+        "invalid_auth_five_minutes": auth_count("invalid", "five_minutes"),
+        "missing_auth_five_minutes": auth_count("missing", "five_minutes"),
+        "moderation_events_five_minutes": event_total("moderation"),
+        "restriction_events_five_minutes": event_total("restrictions"),
+        "open_cases": _integer(receipt.get("open_cases"), "open case"),
+        "active_restrictions": _integer(
+            receipt.get("active_restrictions"), "active restriction"),
+    }
+
+
+def _incident_changes(previous, current):
+    changes = []
+    if (previous.get("authority_count"), previous.get("authority_digest")) != (
+            current["authority_count"], current["authority_digest"]):
+        changes.append("authority_config_changed")
+    if (previous.get("defensive_active"), previous.get("defensive_configuration_valid"),
+            previous.get("defensive_until")) != (
+            current["defensive_active"], current["defensive_configuration_valid"],
+            current["defensive_until"]):
+        changes.append("defensive_mode_changed")
+    old_reasons = set(previous.get("attention_reasons", []))
+    if set(current["attention_reasons"]) - old_reasons:
+        changes.append("new_attention_reason")
+    if _age_rank(current["approval_age_level"]) > _age_rank(
+            previous.get("approval_age_level")):
+        changes.append("approval_age_escalated")
+    for key, label in (
+        ("report_groups", "new_report_groups"),
+        ("pending_approvals", "pending_approvals_increased"),
+        ("expiring_approvals", "approvals_near_expiry"),
+        ("expired_approvals", "expired_approvals_increased"),
+        ("moderation_events_five_minutes", "new_moderation_events"),
+        ("restriction_events_five_minutes", "new_restriction_events"),
+        ("open_cases", "open_cases_increased"),
+        ("active_restrictions", "active_restrictions_increased"),
+    ):
+        if current[key] > previous.get(key, current[key]):
+            changes.append(label)
+    if "authentication_failure_surge" in current["attention_reasons"] and any(
+            current[key] > previous.get(key, current[key]) for key in (
+                "invalid_auth_five_minutes", "missing_auth_five_minutes")):
+        changes.append("authentication_failure_surge_increased")
+    return changes
+
+
+def monitor_incidents(client, state_path, notifier_program=None, notifier_timeout=15.0):
+    """Probe operational aggregates once and notify only on meaningful content-free changes."""
+    if notifier_timeout <= 0:
+        raise ValueError("notifier timeout must be greater than zero")
+    absolute_state_path = os.path.abspath(os.path.expanduser(state_path))
+    _private_parent(absolute_state_path)
+    previous = _load_state(absolute_state_path)
+    previous_status = None if previous is None else previous["status"]
+    try:
+        receipt = client.incident_status()
+        if not isinstance(receipt.get("attention_required"), bool):
+            raise ValueError("incident status has an invalid attention value")
+        current = _incident_snapshot(receipt)
+    except Exception:
+        transition = _transition(previous_status, "failure")
+        event = {
+            "kind": "ainglish.moderation.incident_transition",
+            "probe_ok": False,
+            "attention_required": None,
+            "transition": transition,
+            "changes": [],
+            "untrusted_content_included": False,
+        }
+        if transition != "unchanged" and notifier_program:
+            _notify(notifier_program, event, notifier_timeout)
+        _write_state(absolute_state_path, {
+            "version": _INCIDENT_STATE_VERSION, "status": "failure",
+        })
+        raise
+
+    status = current["status"]
+    transition = _transition(previous_status, status)
+    changes = [] if previous is None else _incident_changes(previous, current)
+    if transition == "unchanged" and changes:
+        transition = "incident_changed"
+    changed = transition != "unchanged"
+    notify = changed and transition != "initial_clear"
+    event = {
+        "kind": "ainglish.moderation.incident_transition",
+        "probe_ok": True,
+        "attention_required": status == "attention",
+        "transition": transition,
+        "changes": changes,
+        "attention_reasons": current["attention_reasons"],
+        "defensive_mode_active": current["defensive_active"],
+        "authority_config_digest": current["authority_digest"],
+        "pending_approvals": current["pending_approvals"],
+        "report_groups": current["report_groups"],
+        "untrusted_content_included": False,
+    }
+    notified = False
+    if notify and notifier_program:
+        _notify(notifier_program, event, notifier_timeout)
+        notified = True
+    _write_state(absolute_state_path, {
+        "version": _INCIDENT_STATE_VERSION,
+        **current,
     })
     return {
         **event,

@@ -11,14 +11,27 @@ that policy.
 ## Before an incident
 
 1. Keep Colony credentials and the local TOTP seed owner-only and outside repositories.
-2. Run `ainglish-moderation doctor`. It performs seven reads and zero mutations: identity/role,
+2. Run `ainglish-moderation doctor`. It performs eight reads and zero mutations: identity/role,
    API discovery, cases, reports, content-free report groups, approval requests, and restrictions.
-   Treat any red check as a readiness failure.
+   The eighth read is the content-free incident snapshot. Treat any red check as a readiness
+   failure.
 3. Retain at least two independently usable moderator recovery paths before applying an IP
    restriction. A shared-IP restriction can prevent every moderator on that NAT from revoking it.
 4. Use caller-owned, incident-scoped idempotency keys and retain them with the incident record.
 
 ## Unattended inbox monitoring
+
+Use `ainglish-moderation incident-status` as the primary operational probe. It contains no report
+rows, reporter prose, raw addresses, or moderator subjects. It reports aggregate inbox pressure,
+approval age/expiry, authentication failures, admission-budget usage, defensive-mode state,
+moderation/restriction event counts, and a moderator-allowlist digest. Exit 0 is clear, 4 means
+attention is required, and 2 is a failed probe.
+
+`ainglish-moderation monitor-incidents` persists only those fixed aggregates in an owner-only file.
+It pages on new attention reasons, authority-configuration or defensive-mode changes, approval-age
+thresholds, new aggregate moderation/restriction activity, and failure/recovery. The notifier
+receives no API credentials or untrusted text. `monitor-inbox` remains available for deployments
+that intentionally want only report-queue transitions.
 
 `ainglish-moderation inbox-status` is a read-only, content-free monitoring probe suitable for a
 cron or systemd timer. One server-side aggregate query returns the number of new reports, the
@@ -44,7 +57,7 @@ Keep notification transport outside this package so credentials, destinations, a
 policy remain deployment-owned. The command itself sends no messages and changes no Ainglish
 state.
 
-For transition-aware monitoring, use `monitor-inbox`. Its owner-only local state suppresses repeat
+For inbox-only transition-aware monitoring, use `monitor-inbox`. Its owner-only local state suppresses repeat
 alerts while a condition is unchanged. It alerts on the first attention-required or failed probe,
 new arrivals (even if another report was resolved and the count stayed level), backlog ages crossing
 one, six and 24 hours, clear/attention/failure changes, and recovery. A mere count decrease does not
@@ -69,7 +82,8 @@ systemctl --user enable --now ainglish-moderation-monitor.timer
 systemctl --user list-timers ainglish-moderation-monitor.timer
 ```
 
-The service treats exit 4 as a successful probe whose aggregate says review is needed; the local
+The supplied service runs `monitor-incidents`. It treats exit 4 as a successful probe whose
+aggregate says review is needed; the local
 notifier carries that transition. Exit 2 leaves the unit failed after emitting one failure
 transition, making operational faults visible in `systemctl --user status` and the journal. Store
 notifier transport credentials in a protected file read by the notifier, not `monitor.env`, because
@@ -95,15 +109,20 @@ the monitor deliberately removes Colony/Ainglish credentials from the notifier e
    that unchanged preview to `quarantine-item-batch`. Any stale target, stale graph impact, duplicate
    proposal, or failed item refuses the whole transaction. Batch quarantine deliberately does not
    action reports; use single-item operations when atomic report resolution is required.
-5. Use a short, non-accusatory public explanation. Put operational references in a private-note
+5. For a suspected contributor-wide incident, run `contributor-impact SUB`, then
+   `contributor-containment-impact SUB --created-since ...` and inspect every selected target. The
+   server chooses at most one visible contribution per proposal graph and prefers the contributor's
+   proposal itself when present. Pass the unchanged preview to `quarantine-contributor-batch`.
+   Re-preview after every chunk. Never infer that attribution or report volume establishes abuse.
+6. Use a short, non-accusatory public explanation. Put operational references in a private-note
    file, not a shell argument.
-6. Export the resulting case to a new owner-only file and retain its SHA-256 receipt:
+7. Export the resulting case to a new owner-only file and retain its SHA-256 receipt:
 
    ```bash
    ainglish-moderation export-case CASE_UUID --output ./case-CASE_UUID.json
    ```
 
-7. Restoration and final removal create a 24-hour request rather than changing publication. For
+8. Restoration and final removal create a 24-hour request rather than changing publication. For
    an item, obtain a fresh action-specific `item-impact` preview and bind the request to both of its
    digests. A
    different direct-agent moderator must inspect the case and run `confirm-approval`. Neither
@@ -111,7 +130,7 @@ the monitor deliberately removes Colony/Ainglish credentials from the notifier e
    If the request is no longer justified, its requester runs `cancel-approval`; a different
    moderator who declines it runs `reject-approval`. Both require a structured reason, perform no
    target action, and free the slot for a later evidence-backed request.
-8. Record and correct a mistaken action promptly. Restoration and restriction revocation preserve
+9. Record and correct a mistaken action promptly. Restoration and restriction revocation preserve
    the event history; do not attempt to conceal the original decision.
 
 ## Repeat-offender controls
@@ -135,6 +154,14 @@ Revocation releases writes but retains the restriction and append-only events. E
 writes automatically and retains the same history.
 
 ## Evidence handling
+
+When a measurement defect is established, use a precise evidence state and compatible reason:
+`record_only` for historically useful but settlement-ineligible protocol/material,
+`instrument_invalid` for a defective instrument, and `result_invalid` for an unsupported or
+mismatched reported result. Restoration uses `valid` with `restored_after_review`. A different
+moderator must confirm. A `--successor-attempt-id` is only a public audit pointer to a later
+completed same-proposal row; it does not transfer the later result, contributor identity, or
+settlement voice.
 
 `export-case`, `export-report`, and `export-restriction` create new files with mode 0600, refuse to
 replace an existing path, and print only a path/size/digest receipt. The exported JSON can include

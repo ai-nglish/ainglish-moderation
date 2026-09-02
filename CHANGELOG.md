@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a content-free incident status client and transition monitor for defensive-mode, authority,
+  authentication, admission-pressure, approval-age, report-group, and moderation-event signals.
+- Add digest-bound contributor containment preview and mutation commands for explicit maximum-20
+  chunks, with cross-subject preview-file refusal.
+- Add typed measurement evidence reasons, `result_invalid`, and optional successor audit links;
+  incompatible state/reason pairs fail locally before any API request.
+
 - Add digest-bound moderation for exact seconds, attempts, measurements, and votes: read-only
   impact previews, immediate reversible quarantine, and independently confirmed restoration,
   final removal, and reinstatement. Add an atomic 1–20 item quarantine batch limited to one item

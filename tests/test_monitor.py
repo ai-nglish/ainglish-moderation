@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from ainglish_moderation.monitor import monitor_inbox
+from ainglish_moderation.monitor import monitor_incidents, monitor_inbox
 
 
 def _receipt(attention, count=0, groups=None, age=None, newest=None, newest_group=None):
@@ -26,11 +26,50 @@ def _receipt(attention, count=0, groups=None, age=None, newest=None, newest_grou
     }
 
 
+def _incident_receipt(attention=False, reasons=None, authority="a", defensive=False,
+                      groups=0, pending=0, approval_age=None, auth_invalid=0,
+                      moderation_events=0, restrictions=0):
+    return {
+        "kind": "ainglish.moderation.incident_status",
+        "attention_required": attention,
+        "attention_reasons": list(reasons or []),
+        "defensive_mode": {
+            "active": defensive, "configuration_valid": True,
+            "until": "2026-09-02T14:00:00+00:00" if defensive else None,
+        },
+        "authority_config": {
+            "count": 2, "digest": authority * 64, "subjects_included": False,
+        },
+        "reports": {"exact_groups": groups, "newest_group_at": None},
+        "approvals": {
+            "pending": pending, "oldest_age_seconds": approval_age,
+            "expiring_within_hour": 0, "expired_unclosed": 0,
+        },
+        "authentication_failures": {
+            "invalid": {"five_minutes": auth_invalid, "one_hour": auth_invalid},
+            "missing": {"five_minutes": 0, "one_hour": 0},
+        },
+        "write_admission": {}, "moderator_admission": {},
+        "recent_events": {
+            "moderation": {"quarantined": moderation_events} if moderation_events else {},
+            "restrictions": {"created": restrictions} if restrictions else {},
+        },
+        "open_cases": moderation_events, "active_restrictions": restrictions,
+        "mutations_performed": 0, "untrusted_content_included": False,
+    }
+
+
 class FakeClient:
     def __init__(self, values):
         self.values = iter(values)
 
     def inbox_status(self):
+        value = next(self.values)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    def incident_status(self):
         value = next(self.values)
         if isinstance(value, Exception):
             raise value
@@ -235,6 +274,70 @@ class MonitorTest(unittest.TestCase):
             self.assertNotIn("COLONY_API_KEY", environment)
             self.assertNotIn("AINGLISH_ID_TOKEN", environment)
             self.assertNotIn("AINGLISH_TOTP_SECRET_FILE", environment)
+
+    def test_incident_monitor_pages_on_authority_and_defensive_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = os.path.join(directory, "incident.json")
+            notifier, events = self._notifier(directory)
+            initial = monitor_incidents(
+                FakeClient([_incident_receipt()]), state_path, notifier)
+            authority = monitor_incidents(
+                FakeClient([_incident_receipt(authority="b")]), state_path, notifier)
+            defensive = monitor_incidents(FakeClient([_incident_receipt(
+                attention=True, reasons=["defensive_mode_active"], authority="b",
+                defensive=True,
+            )]), state_path, notifier)
+
+            self.assertEqual("initial_clear", initial["transition"])
+            self.assertFalse(initial["notified"])
+            self.assertEqual("incident_changed", authority["transition"])
+            self.assertEqual(["authority_config_changed"], authority["changes"])
+            self.assertEqual("attention_required", defensive["transition"])
+            self.assertIn("defensive_mode_changed", defensive["changes"])
+            emitted = self._events(events)
+            self.assertEqual(2, len(emitted))
+            self.assertTrue(all(not event["untrusted_content_included"] for event in emitted))
+            with open(state_path, "r", encoding="utf-8") as handle:
+                persisted = handle.read()
+            self.assertNotIn("subject", persisted)
+
+    def test_incident_monitor_alerts_on_age_events_and_auth_surge_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = os.path.join(directory, "incident.json")
+            notifier, events = self._notifier(directory)
+            monitor_incidents(FakeClient([_incident_receipt(
+                attention=True, reasons=["approval_backlog_age"], pending=1,
+                approval_age=3500,
+            )]), state_path, notifier)
+            changed = monitor_incidents(FakeClient([_incident_receipt(
+                attention=True,
+                reasons=["approval_backlog_age", "authentication_failure_surge"],
+                pending=2, approval_age=3700, auth_invalid=12, moderation_events=1,
+            )]), state_path, notifier)
+            unchanged = monitor_incidents(FakeClient([_incident_receipt(
+                attention=True,
+                reasons=["approval_backlog_age", "authentication_failure_surge"],
+                pending=2, approval_age=3800, auth_invalid=12, moderation_events=1,
+            )]), state_path, notifier)
+
+            self.assertEqual("incident_changed", changed["transition"])
+            self.assertIn("approval_age_escalated", changed["changes"])
+            self.assertIn("authentication_failure_surge_increased", changed["changes"])
+            self.assertIn("new_moderation_events", changed["changes"])
+            self.assertEqual("unchanged", unchanged["transition"])
+            self.assertEqual(2, len(self._events(events)))
+
+    def test_incident_monitor_rejects_unknown_reason_without_persisting_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = os.path.join(directory, "incident.json")
+            receipt = _incident_receipt(attention=True)
+            receipt["attention_reasons"] = ["untrusted prose must not persist"]
+            with self.assertRaisesRegex(ValueError, "unknown attention reason"):
+                monitor_incidents(FakeClient([receipt]), state_path)
+            with open(state_path, "r", encoding="utf-8") as handle:
+                state = handle.read()
+            self.assertNotIn("untrusted", state)
+            self.assertEqual("failure", json.loads(state)["status"])
 
 
 if __name__ == "__main__":
