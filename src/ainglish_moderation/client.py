@@ -943,6 +943,8 @@ class ModerationClient(AinglishClient):
 
         def event_counts(kind):
             rows = recent.get(kind)
+            if rows == []:
+                rows = {}  # PHP serializes an empty label->count map as []; the quiet state is normal
             if not isinstance(rows, dict) or any(
                     not isinstance(action, str) or len(action) > 64
                     or not action.replace("_", "").isalnum()

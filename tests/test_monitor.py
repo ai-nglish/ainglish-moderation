@@ -327,6 +327,16 @@ class MonitorTest(unittest.TestCase):
             self.assertEqual("unchanged", unchanged["transition"])
             self.assertEqual(2, len(self._events(events)))
 
+    def test_incident_monitor_accepts_php_empty_map_recent_events(self):
+        """An empty PHP map arrives as []; the monitor must read it as zero events, not fail."""
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = os.path.join(directory, "incident.json")
+            receipt = _incident_receipt()
+            receipt["recent_events"] = {"window_seconds": 300, "moderation": [], "restrictions": []}
+            result = monitor_incidents(FakeClient([receipt]), state_path, None)
+            self.assertTrue(result["probe_ok"])
+            self.assertEqual("initial_clear", result["transition"])
+
     def test_incident_monitor_rejects_unknown_reason_without_persisting_it(self):
         with tempfile.TemporaryDirectory() as directory:
             state_path = os.path.join(directory, "incident.json")

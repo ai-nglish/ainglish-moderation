@@ -303,6 +303,8 @@ def _incident_snapshot(receipt):
 
     def event_total(kind):
         values = recent.get(kind)
+        if values == []:
+            values = {}  # PHP serializes an empty label->count map as []; the quiet state is normal
         if not isinstance(values, dict) or any(
                 not isinstance(name, str) or not isinstance(count, int)
                 or isinstance(count, bool) or count < 0 for name, count in values.items()):
