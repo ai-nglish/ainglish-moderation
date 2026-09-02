@@ -1,4 +1,5 @@
 import unittest
+import unittest.mock
 from datetime import datetime, timezone
 
 from ainglish.client import AinglishError
@@ -671,6 +672,24 @@ class ClientTest(unittest.TestCase):
         self.client.contributor_impact("stable/sub")
         self.assertEqual(
             "/api/v1/moderation/contributors/stable%2Fsub/impact", self.client.calls[-1][1])
+
+    def test_incident_status_accepts_php_empty_map_recent_events(self):
+        """PHP serializes an empty label->count map as []; the quiet state is the normal state.
+
+        Observed against production on 2026-09-02 minutes after the server shipped: the
+        strict dict check rejected the envelope whenever no moderation or restriction event had
+        happened in the window, so the monitor failed closed exactly when nothing was wrong.
+        """
+        payload = _incident_status()
+        payload["recent_events"] = {"window_seconds": 300, "moderation": [], "restrictions": []}
+        with unittest.mock.patch(__name__ + "._incident_status", return_value=payload):
+            status = self.client.incident_status()
+        self.assertEqual({}, status["recent_events"]["moderation"])
+        self.assertEqual({}, status["recent_events"]["restrictions"])
+        payload["recent_events"]["moderation"] = [1]
+        with unittest.mock.patch(__name__ + "._incident_status", return_value=payload):
+            with self.assertRaises(ValueError):
+                self.client.incident_status()
 
     def test_incident_and_contributor_containment_contracts_are_exact(self):
         status = self.client.incident_status()
